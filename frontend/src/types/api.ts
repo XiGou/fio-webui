@@ -36,6 +36,18 @@ export interface FioConfig {
   sequential?: boolean // If true, run jobs sequentially. If false, run in parallel.
 }
 
+// A FioTask represents a complete fio command configuration
+export interface FioTask {
+  name: string
+  global: GlobalConfig
+  jobs: JobConfig[]
+}
+
+// Multiple tasks to run sequentially
+export interface FioTaskList {
+  tasks: FioTask[]
+}
+
 export type RunStatus = 'idle' | 'running' | 'finished' | 'error'
 
 export interface RunState {
@@ -57,4 +69,15 @@ export type WsMessageType = 'connected' | 'status' | 'output' | 'stats'
 export interface WsMessage<T = unknown> {
   type: WsMessageType
   data: T
+}
+
+export interface ValidationError {
+  field: string
+  message: string
+}
+
+export interface TaskValidationResponse {
+  valid: boolean
+  errors?: ValidationError[]
+  warnings?: ValidationError[]
 }

@@ -70,6 +70,7 @@ func (s *Server) Run() error {
 
 	mux.HandleFunc("/api/options", s.handleOptions)
 	mux.HandleFunc("/api/defaults", s.handleDefaults)
+	mux.HandleFunc("/api/validate", s.handleValidate)
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/status", s.handleStatus)

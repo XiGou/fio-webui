@@ -52,8 +52,30 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try to decode as FioTaskList first
+	var taskList fio.FioTaskList
+	bodyBytes := make([]byte, 0)
+	if r.Body != nil {
+		bodyBytes, _ = os.ReadAll(r.Body)
+		r.Body.Close()
+	}
+
+	// Try FioTaskList first
+	if err := json.Unmarshal(bodyBytes, &taskList); err == nil && len(taskList.Tasks) > 0 {
+		state, err := s.executor.RunTasks(taskList.Tasks)
+		if err != nil {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+		return
+	}
+
+	// Fallback to FioConfig (backward compatibility)
 	var config fio.FioConfig
-	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+	if err := json.Unmarshal(bodyBytes, &config); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -83,6 +105,23 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "stopped"})
+}
+
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var config fio.FioConfig
+	if err := json.NewDecoder(r.Body).Decode(&config); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	result := s.executor.Validate(&config)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

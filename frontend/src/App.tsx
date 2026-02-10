@@ -15,9 +15,12 @@ import { ansiToHtml } from '@/lib/ansi'
 import type {
   DefaultsResponse,
   FioConfig,
+  FioTask,
+  FioTaskList,
   JobConfig,
   OptionsResponse,
   RunState,
+  TaskValidationResponse,
   WsMessage,
 } from '@/types/api'
 
@@ -37,6 +40,8 @@ const FALLBACK_OPTIONS: OptionsResponse = {
 
 type JobDraft = JobConfig & { _id: string; _collapsed: boolean; _stonewallAfter?: boolean } // If true, insert stonewall after this job. JobConfig may include runtime and ioengine overrides.
 
+type TaskDraft = FioTask & { _id: string; _collapsed: boolean; _validating?: boolean; _validationErrors?: TaskValidationResponse }
+
 function newJobDraft(base?: Partial<JobConfig>): JobDraft {
   const now = Date.now().toString(36)
   const rand = Math.random().toString(36).slice(2, 7)
@@ -55,46 +60,56 @@ function newJobDraft(base?: Partial<JobConfig>): JobDraft {
   }
 }
 
-function buildConfig(
-  global: {
-    ioengine: string
-    direct: boolean
-    runtime: number
-    log_avg_msec: number
-    output_format: string
-    status_interval: number
-  },
-  jobs: JobDraft[]
-): FioConfig {
-  // Check if any job has stonewall set
-  const hasStonewall = jobs.some((j) => j._stonewallAfter)
-  
+function newTaskDraft(base?: Partial<FioTask>): TaskDraft {
+  const now = Date.now().toString(36)
+  const rand = Math.random().toString(36).slice(2, 7)
   return {
-    global: {
-      ioengine: global.ioengine,
-      direct: global.direct,
-      runtime: global.runtime,
+    _id: `task_${now}_${rand}`,
+    _collapsed: false,
+    name: base?.name || `task${Date.now()}`,
+    global: base?.global || {
+      ioengine: 'libaio',
+      direct: true,
+      runtime: 60,
       time_based: true,
       group_reporting: true,
-      log_avg_msec: global.log_avg_msec,
-      output_format: global.output_format,
-      status_interval: global.status_interval,
+      log_avg_msec: 500,
+      output_format: 'json',
+      status_interval: 1,
     },
-    jobs: jobs.map((j, idx) => ({
-      name: (j.name || `job${idx + 1}`).trim() || `job${idx + 1}`,
-      filename: j.filename,
-      rw: j.rw,
-      bs: j.bs,
-      size: j.size,
-      numjobs: j.numjobs,
-      iodepth: j.iodepth,
-      rwmixread: j.rwmixread,
-      rate: j.rate || '',
-      stonewallAfter: j._stonewallAfter || false,
-      runtime: j.runtime,
-      ioengine: j.ioengine,
+    jobs: base?.jobs?.map((j) => ({ ...j })) || [newJobDraft({ name: 'job1' })],
+  }
+}
+
+function buildTaskList(tasks: TaskDraft[]): FioTaskList {
+  return {
+    tasks: tasks.map((t) => ({
+      name: (t.name || `task`).trim() || `task`,
+      global: {
+        ioengine: t.global.ioengine,
+        direct: t.global.direct,
+        runtime: t.global.runtime,
+        time_based: t.global.time_based ?? true,
+        group_reporting: t.global.group_reporting ?? true,
+        log_avg_msec: t.global.log_avg_msec,
+        output_format: t.global.output_format,
+        status_interval: t.global.status_interval,
+      },
+      jobs: t.jobs.map((j, idx) => ({
+        name: (j.name || `job${idx + 1}`).trim() || `job${idx + 1}`,
+        filename: j.filename,
+        rw: j.rw,
+        bs: j.bs,
+        size: j.size,
+        numjobs: j.numjobs,
+        iodepth: j.iodepth,
+        rwmixread: j.rwmixread,
+        rate: j.rate || '',
+        stonewallAfter: (j as JobDraft)._stonewallAfter || false,
+        runtime: j.runtime,
+        ioengine: j.ioengine,
+      })),
     })),
-    sequential: !hasStonewall, // If stonewall is used, jobs are in one file, so sequential is not needed
   }
 }
 
@@ -109,7 +124,7 @@ export default function App() {
     output_format: 'json',
     status_interval: 1,
   })
-  const [jobs, setJobs] = useState<JobDraft[]>([newJobDraft()])
+  const [tasks, setTasks] = useState<TaskDraft[]>([newTaskDraft({ name: 'task1' })])
   const [state, setState] = useState<RunState | null>(null)
   const [outputLines, setOutputLines] = useState<string[]>([])
   const [backendOffline, setBackendOffline] = useState(false)
@@ -139,22 +154,35 @@ export default function App() {
             status_interval: def.global.status_interval ?? g.status_interval,
           }))
         }
-        if (def?.job) {
-          setJobs((prev) => {
-            if (prev.length === 0) return [newJobDraft(def.job)]
+        if (def?.job && def?.global) {
+          setTasks((prev) => {
+            if (prev.length === 0) {
+              return [newTaskDraft({ name: 'task1', global: def.global, jobs: [newJobDraft(def.job)] })]
+            }
             const first = prev[0]
+            if (first.jobs.length === 0) {
+              return [{ ...first, global: def.global, jobs: [newJobDraft(def.job)] }, ...prev.slice(1)]
+            }
+            const firstJob = first.jobs[0] as JobDraft
             return [
               {
                 ...first,
-                name: def.job.name ?? first.name,
-                filename: def.job.filename ?? first.filename,
-                rw: def.job.rw ?? first.rw,
-                bs: def.job.bs ?? first.bs,
-                size: def.job.size ?? first.size,
-                numjobs: def.job.numjobs ?? first.numjobs,
-                iodepth: def.job.iodepth ?? first.iodepth,
-                rwmixread: def.job.rwmixread ?? first.rwmixread,
-                rate: def.job.rate ?? first.rate,
+                global: def.global,
+                jobs: [
+                  {
+                    ...firstJob,
+                    name: def.job.name ?? firstJob.name,
+                    filename: def.job.filename ?? firstJob.filename,
+                    rw: def.job.rw ?? firstJob.rw,
+                    bs: def.job.bs ?? firstJob.bs,
+                    size: def.job.size ?? firstJob.size,
+                    numjobs: def.job.numjobs ?? firstJob.numjobs,
+                    iodepth: def.job.iodepth ?? firstJob.iodepth,
+                    rwmixread: def.job.rwmixread ?? firstJob.rwmixread,
+                    rate: def.job.rate ?? firstJob.rate,
+                  },
+                  ...first.jobs.slice(1),
+                ],
               },
               ...prev.slice(1),
             ]
@@ -234,17 +262,70 @@ export default function App() {
 
   const run = state?.status === 'running'
   const start = async () => {
-    const config = buildConfig(global, jobs)
-    if (config.jobs.length === 0) return
+    const taskList = buildTaskList(tasks)
+    if (taskList.tasks.length === 0) return
+    if (taskList.tasks.every((t) => t.jobs.length === 0)) return
     setOutputLines(['Starting test...'])
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
+      body: JSON.stringify(taskList),
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
       setOutputLines((prev) => [...prev, `Error: ${(err as { error?: string }).error || res.statusText}`])
+    }
+  }
+
+  const validateTask = async (taskId: string) => {
+    const task = tasks.find((t) => t._id === taskId)
+    if (!task) return
+
+    setTasks((prev) => prev.map((t) => (t._id === taskId ? { ...t, _validating: true } : t)))
+
+    const config: FioConfig = {
+      global: task.global,
+      jobs: task.jobs.map((j) => ({
+        name: j.name,
+        filename: j.filename,
+        rw: j.rw,
+        bs: j.bs,
+        size: j.size,
+        numjobs: j.numjobs,
+        iodepth: j.iodepth,
+        rwmixread: j.rwmixread,
+        rate: j.rate,
+        stonewallAfter: (j as JobDraft)._stonewallAfter,
+        runtime: j.runtime,
+        ioengine: j.ioengine,
+      })),
+    }
+
+    try {
+      const res = await fetch('/api/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      })
+      const result = (await res.json()) as TaskValidationResponse
+      setTasks((prev) =>
+        prev.map((t) => (t._id === taskId ? { ...t, _validating: false, _validationErrors: result } : t))
+      )
+    } catch (err) {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t._id === taskId
+            ? {
+                ...t,
+                _validating: false,
+                _validationErrors: {
+                  valid: false,
+                  errors: [{ field: 'network', message: `Validation failed: ${err}` }],
+                },
+              }
+            : t
+        )
+      )
     }
   }
 
@@ -253,45 +334,46 @@ export default function App() {
     await fetch('/api/stop', { method: 'POST' })
   }
 
-  const jobCount = jobs.length
+  const totalJobCount = useMemo(() => tasks.reduce((sum, t) => sum + t.jobs.length, 0), [tasks])
   const runningLabel = useMemo(() => (state ? STATUS_LABEL[state.status] ?? state.status : 'Idle'), [state])
 
-  const collapseAllExcept = (id: string) => {
-    setJobs((prev) => prev.map((j) => ({ ...j, _collapsed: j._id !== id })))
+  // Task operations
+  const toggleTaskCollapse = (taskId: string) => {
+    setTasks((prev) => prev.map((t) => (t._id === taskId ? { ...t, _collapsed: !t._collapsed } : t)))
   }
 
-  const toggleCollapse = (id: string) => {
-    setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, _collapsed: !j._collapsed } : j)))
-  }
-
-  const addJobAfter = (afterId?: string, template?: Partial<JobConfig>) => {
-    setJobs((prev) => {
-      const draft = newJobDraft(template)
-      const collapsedPrev = prev.map((j) => ({ ...j, _collapsed: true }))
+  const addTaskAfter = (afterId?: string, template?: Partial<FioTask>) => {
+    setTasks((prev) => {
+      const draft = newTaskDraft(template)
+      const collapsedPrev = prev.map((t) => ({ ...t, _collapsed: true }))
       if (!afterId) return [...collapsedPrev, draft]
-      const idx = prev.findIndex((j) => j._id === afterId)
+      const idx = prev.findIndex((t) => t._id === afterId)
       if (idx < 0) return [...collapsedPrev, draft]
       return [...collapsedPrev.slice(0, idx + 1), draft, ...collapsedPrev.slice(idx + 1)]
     })
   }
 
-  const duplicateJob = (id: string) => {
-    const src = jobs.find((j) => j._id === id)
+  const duplicateTask = (taskId: string) => {
+    const src = tasks.find((t) => t._id === taskId)
     if (!src) return
-    addJobAfter(id, src)
+    addTaskAfter(taskId, {
+      name: `${src.name}_copy`,
+      global: { ...src.global },
+      jobs: src.jobs.map((j) => ({ ...j })),
+    })
   }
 
-  const removeJob = (id: string) => {
-    setJobs((prev) => {
-      const next = prev.filter((j) => j._id !== id)
-      if (next.length === 0) return [newJobDraft({ name: 'job1' })]
+  const removeTask = (taskId: string) => {
+    setTasks((prev) => {
+      const next = prev.filter((t) => t._id !== taskId)
+      if (next.length === 0) return [newTaskDraft({ name: 'task1' })]
       return next
     })
   }
 
-  const moveJob = (id: string, dir: -1 | 1) => {
-    setJobs((prev) => {
-      const idx = prev.findIndex((j) => j._id === id)
+  const moveTask = (taskId: string, dir: -1 | 1) => {
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t._id === taskId)
       const to = idx + dir
       if (idx < 0 || to < 0 || to >= prev.length) return prev
       const copy = [...prev]
@@ -301,12 +383,124 @@ export default function App() {
     })
   }
 
-  const updateJob = (id: string, patch: Partial<JobDraft>) => {
-    setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, ...patch } : j)))
+  const updateTask = (taskId: string, patch: Partial<TaskDraft>) => {
+    setTasks((prev) => prev.map((t) => (t._id === taskId ? { ...t, ...patch } : t)))
   }
 
-  const toggleStonewall = (id: string) => {
-    setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, _stonewallAfter: !j._stonewallAfter } : j)))
+  // Job operations within a task
+  const collapseAllJobsExcept = (taskId: string, jobId: string) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t._id === taskId
+          ? {
+              ...t,
+              jobs: t.jobs.map((j) => {
+                const jd = j as JobDraft
+                return { ...jd, _collapsed: jd._id !== jobId } as JobDraft
+              }),
+            }
+          : t
+      )
+    )
+  }
+
+  const toggleJobCollapse = (taskId: string, jobId: string) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t._id === taskId
+          ? {
+              ...t,
+              jobs: t.jobs.map((j) => {
+                const jd = j as JobDraft
+                return jd._id === jobId ? { ...jd, _collapsed: !jd._collapsed } : jd
+              }),
+            }
+          : t
+      )
+    )
+  }
+
+  const addJobToTask = (taskId: string, afterJobId?: string, template?: Partial<JobConfig>) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t._id !== taskId) return t
+        const draft = newJobDraft(template)
+        const collapsedJobs = t.jobs.map((j) => {
+          const jd = j as JobDraft
+          return { ...jd, _collapsed: true } as JobDraft
+        })
+        if (!afterJobId) return { ...t, jobs: [...collapsedJobs, draft] }
+        const idx = t.jobs.findIndex((j) => (j as JobDraft)._id === afterJobId)
+        if (idx < 0) return { ...t, jobs: [...collapsedJobs, draft] }
+        return { ...t, jobs: [...collapsedJobs.slice(0, idx + 1), draft, ...collapsedJobs.slice(idx + 1)] }
+      })
+    )
+  }
+
+  const duplicateJobInTask = (taskId: string, jobId: string) => {
+    const task = tasks.find((t) => t._id === taskId)
+    if (!task) return
+    const src = task.jobs.find((j) => (j as JobDraft)._id === jobId) as JobDraft | undefined
+    if (!src) return
+    addJobToTask(taskId, jobId, src)
+  }
+
+  const removeJobFromTask = (taskId: string, jobId: string) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t._id !== taskId) return t
+        const next = t.jobs.filter((j) => (j as JobDraft)._id !== jobId)
+        if (next.length === 0) return { ...t, jobs: [newJobDraft({ name: 'job1' })] }
+        return { ...t, jobs: next }
+      })
+    )
+  }
+
+  const moveJobInTask = (taskId: string, jobId: string, dir: -1 | 1) => {
+    setTasks((prev) =>
+      prev.map((t) => {
+        if (t._id !== taskId) return t
+        const idx = t.jobs.findIndex((j) => (j as JobDraft)._id === jobId)
+        const to = idx + dir
+        if (idx < 0 || to < 0 || to >= t.jobs.length) return t
+        const copy = [...t.jobs]
+        const [item] = copy.splice(idx, 1)
+        copy.splice(to, 0, item)
+        return { ...t, jobs: copy }
+      })
+    )
+  }
+
+  const updateJobInTask = (taskId: string, jobId: string, patch: Partial<JobDraft>) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t._id === taskId
+          ? {
+              ...t,
+              jobs: t.jobs.map((j) => {
+                const jd = j as JobDraft
+                return jd._id === jobId ? { ...jd, ...patch } : jd
+              }),
+            }
+          : t
+      )
+    )
+  }
+
+  const toggleStonewall = (taskId: string, jobId: string) => {
+    setTasks((prev) =>
+      prev.map((t) =>
+        t._id === taskId
+          ? {
+              ...t,
+              jobs: t.jobs.map((j) => {
+                const jd = j as JobDraft
+                return jd._id === jobId ? { ...jd, _stonewallAfter: !jd._stonewallAfter } : jd
+              }),
+            }
+          : t
+      )
+    )
   }
 
   const showRwmix = (rw: string) =>
@@ -327,7 +521,7 @@ export default function App() {
         <div className="space-y-0.5">
           <h1 className="text-xl font-semibold text-foreground">FIO WebUI</h1>
           <p className="text-xs text-muted-foreground">
-            {jobCount} job{jobCount > 1 ? 's' : ''} · {jobs.some((j) => j._stonewallAfter) ? 'stonewall groups' : 'parallel execution'}
+            {tasks.length} task{tasks.length > 1 ? 's' : ''} · {totalJobCount} job{totalJobCount > 1 ? 's' : ''} · sequential execution
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -362,288 +556,389 @@ export default function App() {
               </div>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-foreground">Global Settings</h3>
-                <span className="text-xs text-muted-foreground">fio CLI + job defaults</span>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <div className="space-y-2">
-              <Label className="text-xs">IO Engine</Label>
-              <Select value={global.ioengine} onValueChange={(v) => setGlobal((g) => ({ ...g, ioengine: v }))}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {options.io_engines.map((e) => (
-                    <SelectItem key={e} value={e}>{e}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center gap-2 pt-6">
-              <Switch checked={global.direct} onCheckedChange={(v) => setGlobal((g) => ({ ...g, direct: v }))} />
-              <Label className="text-xs">Direct I/O</Label>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Runtime (sec)</Label>
-              <Input
-                type="number"
-                min={1}
-                className="h-9"
-                value={global.runtime}
-                onChange={(e) => setGlobal((g) => ({ ...g, runtime: Number(e.target.value) || 60 }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Log sampling (ms)</Label>
-              <Input
-                type="number"
-                min={100}
-                className="h-9"
-                value={global.log_avg_msec}
-                onChange={(e) => setGlobal((g) => ({ ...g, log_avg_msec: Number(e.target.value) || 500 }))}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Output format</Label>
-              <Select
-                value={global.output_format}
-                onValueChange={(v) => setGlobal((g) => ({ ...g, output_format: v }))}
-              >
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {['json', 'json+', 'normal', 'terse'].map((f) => (
-                    <SelectItem key={f} value={f}>{f}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Status interval (sec)</Label>
-              <Input
-                type="number"
-                min={0}
-                className="h-9"
-                value={global.status_interval}
-                onChange={(e) => setGlobal((g) => ({ ...g, status_interval: Number(e.target.value) || 0 }))}
-              />
-            </div>
-          </div>
-            </div>
 
             <div className="border-t border-border pt-4">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-medium text-foreground">Jobs</h3>
+                <h3 className="text-sm font-medium text-foreground">Fio Tasks</h3>
                 <div className="flex gap-2">
                   <Button
                     type="button"
                     variant="secondary"
                     size="sm"
-                    onClick={() => addJobAfter(undefined, { name: `job${jobs.length + 1}` })}
+                    onClick={() => addTaskAfter(undefined, { name: `task${tasks.length + 1}` })}
                   >
-                    Add Job
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => collapseAllExcept(jobs[0]?._id)}
-                    disabled={jobs.length === 0}
-                  >
-                    Collapse Others
+                    Add Task
                   </Button>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                {jobs.map((j, idx) => (
-                  <div key={j._id}>
-                    {/* Stonewall divider - show before job if previous job has stonewallAfter */}
-                    {idx > 0 && jobs[idx - 1]._stonewallAfter && (
-                      <div className="relative my-4">
-                        <div className="absolute inset-0 flex items-center">
-                          <div className="w-full border-t border-dashed border-muted-foreground/40"></div>
-                        </div>
-                        <div className="relative flex justify-center">
-                          <span className="bg-background px-2 text-xs font-medium text-muted-foreground">Stonewall — Sequential Execution</span>
-                        </div>
-                      </div>
-                    )}
-                    <div className="rounded border border-border bg-card">
+              <div className="space-y-3">
+                {tasks.map((task, taskIdx) => {
+                  const taskJobs = task.jobs as JobDraft[]
+                  const validationErrors = task._validationErrors
+                  const isValid = validationErrors ? validationErrors.valid : true
+                  const hasErrors = validationErrors?.errors && validationErrors.errors.length > 0
+                  
+                  return (
+                    <div key={task._id} className="rounded border border-border bg-card">
+                      {/* Task Header */}
                       <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                         <button
                           type="button"
                           className="flex min-w-0 flex-1 items-center gap-3 text-left hover:opacity-80"
-                          onClick={() => toggleCollapse(j._id)}
-                          title={j._collapsed ? 'Expand' : 'Collapse'}
+                          onClick={() => toggleTaskCollapse(task._id)}
+                          title={task._collapsed ? 'Expand' : 'Collapse'}
                         >
-                          <span className="w-5 text-xs font-medium text-muted-foreground">{idx + 1}</span>
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-foreground">
-                              {j.name?.trim() || `job${idx + 1}`}
+                          <span className="w-5 text-xs font-medium text-muted-foreground">{taskIdx + 1}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <div className="truncate text-sm font-medium text-foreground">
+                                {task.name?.trim() || `task${taskIdx + 1}`}
+                              </div>
+                              {hasErrors && (
+                                <span className="text-xs text-destructive">⚠ Invalid</span>
+                              )}
+                              {task._validating && (
+                                <span className="text-xs text-muted-foreground">Validating...</span>
+                              )}
                             </div>
                             <div className="truncate text-xs text-muted-foreground">
-                              {j.rw} · {j.bs} · depth {j.iodepth} · {j.numjobs}× · {j.filename}
+                              {taskJobs.length} job{taskJobs.length > 1 ? 's' : ''} · {task.global.ioengine} · {task.global.runtime}s
                             </div>
                           </div>
                         </button>
 
                         <div className="flex items-center gap-0.5">
-                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, -1)} disabled={idx === 0}>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => validateTask(task._id)}
+                            disabled={task._validating || taskJobs.length === 0}
+                            title="Validate configuration"
+                          >
+                            {task._validating ? '...' : '✓ Test'}
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveTask(task._id, -1)} disabled={taskIdx === 0}>
                             ↑
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, 1)} disabled={idx === jobs.length - 1}>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveTask(task._id, 1)} disabled={taskIdx === tasks.length - 1}>
                             ↓
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateJob(j._id)}>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateTask(task._id)}>
                             Copy
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addJobAfter(j._id, { name: `job${jobs.length + 1}` })}>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addTaskAfter(task._id, { name: `task${tasks.length + 1}` })}>
                             + After
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeJob(j._id)} disabled={jobs.length === 1}>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeTask(task._id)} disabled={tasks.length === 1}>
                             Remove
                           </Button>
                         </div>
                       </div>
 
-                      {!j._collapsed && (
-                        <div className="border-t border-border px-3 py-3">
-                          <div className="mb-3 flex items-center justify-between border-b border-border pb-2">
-                            <Label className="text-xs font-medium">Job Parameters</Label>
-                            <div className="flex items-center gap-2">
-                              <Switch checked={j._stonewallAfter || false} onCheckedChange={() => toggleStonewall(j._id)} />
-                              <Label className="text-xs">Stonewall after this job</Label>
+                      {/* Validation Errors */}
+                      {hasErrors && !task._collapsed && (
+                        <div className="border-t border-destructive/20 bg-destructive/5 px-3 py-2">
+                          <div className="text-xs font-medium text-destructive mb-1">Configuration Errors:</div>
+                          <ul className="list-disc list-inside space-y-0.5 text-xs text-destructive/80">
+                            {validationErrors?.errors?.map((err, i) => (
+                              <li key={i}>{err.field}: {err.message}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {!task._collapsed && (
+                        <div className="border-t border-border px-3 py-3 space-y-4">
+                          {/* Task Name */}
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Task Name</Label>
+                            <Input
+                              className="h-9"
+                              value={task.name}
+                              onChange={(e) => updateTask(task._id, { name: e.target.value })}
+                            />
+                          </div>
+
+                          {/* Global Settings for this Task */}
+                          <div className="space-y-3">
+                            <h4 className="text-xs font-medium text-foreground">Global Settings</h4>
+                            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                              <div className="space-y-2">
+                                <Label className="text-xs">IO Engine</Label>
+                                <Select value={task.global.ioengine} onValueChange={(v) => updateTask(task._id, { global: { ...task.global, ioengine: v } })}>
+                                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {options.io_engines.map((e) => (
+                                      <SelectItem key={e} value={e}>{e}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="flex items-center gap-2 pt-6">
+                                <Switch checked={task.global.direct} onCheckedChange={(v) => updateTask(task._id, { global: { ...task.global, direct: v } })} />
+                                <Label className="text-xs">Direct I/O</Label>
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs">Runtime (sec)</Label>
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  className="h-9"
+                                  value={task.global.runtime}
+                                  onChange={(e) => updateTask(task._id, { global: { ...task.global, runtime: Number(e.target.value) || 60 } })}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs">Log sampling (ms)</Label>
+                                <Input
+                                  type="number"
+                                  min={100}
+                                  className="h-9"
+                                  value={task.global.log_avg_msec}
+                                  onChange={(e) => updateTask(task._id, { global: { ...task.global, log_avg_msec: Number(e.target.value) || 500 } })}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs">Output format</Label>
+                                <Select
+                                  value={task.global.output_format}
+                                  onValueChange={(v) => updateTask(task._id, { global: { ...task.global, output_format: v } })}
+                                >
+                                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    {['json', 'json+', 'normal', 'terse'].map((f) => (
+                                      <SelectItem key={f} value={f}>{f}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs">Status interval (sec)</Label>
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  className="h-9"
+                                  value={task.global.status_interval}
+                                  onChange={(e) => updateTask(task._id, { global: { ...task.global, status_interval: Number(e.target.value) || 0 } })}
+                                />
+                              </div>
                             </div>
                           </div>
-                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">Job name</Label>
-                              <Input
-                                className="h-9"
-                                value={j.name}
-                                onChange={(e) => updateJob(j._id, { name: e.target.value })}
-                                onFocus={() => collapseAllExcept(j._id)}
-                              />
-                            </div>
 
-                            <div className="space-y-1.5 sm:col-span-2">
-                              <Label className="text-xs">Filename / Device</Label>
-                              <Input
-                                className="h-9"
-                                value={j.filename}
-                                onChange={(e) => updateJob(j._id, { filename: e.target.value })}
-                                list="devices-list"
-                                placeholder="/dev/nvme0n1 or /path/to/file"
-                                onFocus={() => collapseAllExcept(j._id)}
-                              />
-                              <datalist id="devices-list">
-                                {options.devices.map((d) => <option key={d} value={d} />)}
-                              </datalist>
-                            </div>
-
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">IO Engine (override)</Label>
-                              <Select 
-                                value={j.ioengine ?? '__global__'} 
-                                onValueChange={(v) => updateJob(j._id, { ioengine: v === '__global__' ? undefined : v })}
+                          {/* Jobs in this Task */}
+                          <div className="space-y-3 border-t border-border pt-3">
+                            <div className="flex items-center justify-between">
+                              <h4 className="text-xs font-medium text-foreground">Jobs</h4>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => addJobToTask(task._id, undefined, { name: `job${taskJobs.length + 1}` })}
                               >
-                                <SelectTrigger className="h-9">
-                                  <SelectValue placeholder={`Use global (${global.ioengine})`} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="__global__">Use global ({global.ioengine})</SelectItem>
-                                  {options.io_engines.map((e) => (
-                                    <SelectItem key={e} value={e}>{e}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                                Add Job
+                              </Button>
                             </div>
 
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">Runtime (override, sec)</Label>
-                              <Input
-                                className="h-9"
-                                type="number"
-                                min={0}
-                                value={j.runtime ?? ''}
-                                onChange={(e) => updateJob(j._id, { runtime: e.target.value === '' ? undefined : Number(e.target.value) || undefined })}
-                                placeholder={`Global: ${global.runtime}s`}
-                              />
-                            </div>
+                            <div className="space-y-2">
+                              {taskJobs.map((j, jobIdx) => (
+                                <div key={j._id}>
+                                  {/* Stonewall divider */}
+                                  {jobIdx > 0 && j._stonewallAfter && (
+                                    <div className="relative my-4">
+                                      <div className="absolute inset-0 flex items-center">
+                                        <div className="w-full border-t border-dashed border-muted-foreground/40"></div>
+                                      </div>
+                                      <div className="relative flex justify-center">
+                                        <span className="bg-background px-2 text-xs font-medium text-muted-foreground">Stonewall — Wait for previous jobs</span>
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="rounded border border-border bg-muted/30">
+                                    <div className="flex items-center justify-between gap-3 px-3 py-2">
+                                      <button
+                                        type="button"
+                                        className="flex min-w-0 flex-1 items-center gap-3 text-left hover:opacity-80"
+                                        onClick={() => toggleJobCollapse(task._id, j._id)}
+                                        title={j._collapsed ? 'Expand' : 'Collapse'}
+                                      >
+                                        <span className="w-5 text-xs font-medium text-muted-foreground">{jobIdx + 1}</span>
+                                        <div className="min-w-0">
+                                          <div className="truncate text-sm font-medium text-foreground">
+                                            {j.name?.trim() || `job${jobIdx + 1}`}
+                                          </div>
+                                          <div className="truncate text-xs text-muted-foreground">
+                                            {j.rw} · {j.bs} · depth {j.iodepth} · {j.numjobs}× · {j.filename}
+                                          </div>
+                                        </div>
+                                      </button>
 
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">RW</Label>
-                            <Select value={j.rw} onValueChange={(v) => updateJob(j._id, { rw: v })}>
-                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {options.rw_types.map((r) => (
-                                  <SelectItem key={r} value={r}>{r}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
+                                      <div className="flex items-center gap-0.5">
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJobInTask(task._id, j._id, -1)} disabled={jobIdx === 0}>
+                                          ↑
+                                        </Button>
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJobInTask(task._id, j._id, 1)} disabled={jobIdx === taskJobs.length - 1}>
+                                          ↓
+                                        </Button>
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateJobInTask(task._id, j._id)}>
+                                          Copy
+                                        </Button>
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addJobToTask(task._id, j._id, { name: `job${taskJobs.length + 1}` })}>
+                                          + After
+                                        </Button>
+                                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeJobFromTask(task._id, j._id)} disabled={taskJobs.length === 1}>
+                                          Remove
+                                        </Button>
+                                      </div>
+                                    </div>
 
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">Block size</Label>
-                            <Input className="h-9" value={j.bs} onChange={(e) => updateJob(j._id, { bs: e.target.value })} placeholder="4k" />
-                          </div>
+                                    {!j._collapsed && (
+                                      <div className="border-t border-border px-3 py-3">
+                                        <div className="mb-3 flex items-center justify-between border-b border-border pb-2">
+                                          <Label className="text-xs font-medium">Job Parameters</Label>
+                                          <div className="flex items-center gap-2">
+                                            <Switch checked={j._stonewallAfter || false} onCheckedChange={() => toggleStonewall(task._id, j._id)} />
+                                            <Label className="text-xs">Wait for previous jobs (stonewall)</Label>
+                                          </div>
+                                        </div>
+                                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">Job name</Label>
+                                            <Input
+                                              className="h-9"
+                                              value={j.name}
+                                              onChange={(e) => updateJobInTask(task._id, j._id, { name: e.target.value })}
+                                              onFocus={() => collapseAllJobsExcept(task._id, j._id)}
+                                            />
+                                          </div>
 
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">Size</Label>
-                            <Input className="h-9" value={j.size} onChange={(e) => updateJob(j._id, { size: e.target.value })} placeholder="1G" />
-                          </div>
+                                          <div className="space-y-1.5 sm:col-span-2">
+                                            <Label className="text-xs">Filename / Device</Label>
+                                            <Input
+                                              className="h-9"
+                                              value={j.filename}
+                                              onChange={(e) => updateJobInTask(task._id, j._id, { filename: e.target.value })}
+                                              list={`devices-list-${task._id}`}
+                                              placeholder="/dev/nvme0n1 or /path/to/file"
+                                              onFocus={() => collapseAllJobsExcept(task._id, j._id)}
+                                            />
+                                            <datalist id={`devices-list-${task._id}`}>
+                                              {options.devices.map((d) => <option key={d} value={d} />)}
+                                            </datalist>
+                                          </div>
 
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">Num jobs</Label>
-                            <Input
-                              className="h-9"
-                              type="number"
-                              min={1}
-                              value={j.numjobs}
-                              onChange={(e) => updateJob(j._id, { numjobs: Number(e.target.value) || 1 })}
-                            />
-                          </div>
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">IO Engine (override)</Label>
+                                            <Select 
+                                              value={j.ioengine ?? '__global__'} 
+                                              onValueChange={(v) => updateJobInTask(task._id, j._id, { ioengine: v === '__global__' ? undefined : v })}
+                                            >
+                                              <SelectTrigger className="h-9">
+                                                <SelectValue placeholder={`Use global (${task.global.ioengine})`} />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                <SelectItem value="__global__">Use global ({task.global.ioengine})</SelectItem>
+                                                {options.io_engines.map((e) => (
+                                                  <SelectItem key={e} value={e}>{e}</SelectItem>
+                                                ))}
+                                              </SelectContent>
+                                            </Select>
+                                          </div>
 
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">IO depth</Label>
-                            <Input
-                              className="h-9"
-                              type="number"
-                              min={1}
-                              value={j.iodepth}
-                              onChange={(e) => updateJob(j._id, { iodepth: Number(e.target.value) || 1 })}
-                            />
-                          </div>
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">Runtime (override, sec)</Label>
+                                            <Input
+                                              className="h-9"
+                                              type="number"
+                                              min={0}
+                                              value={j.runtime ?? ''}
+                                              onChange={(e) => updateJobInTask(task._id, j._id, { runtime: e.target.value === '' ? undefined : Number(e.target.value) || undefined })}
+                                              placeholder={`Global: ${task.global.runtime}s`}
+                                            />
+                                          </div>
 
-                          {showRwmix(j.rw) && (
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">Read %</Label>
-                              <Input
-                                className="h-9"
-                                type="number"
-                                min={0}
-                                max={100}
-                                value={j.rwmixread}
-                                onChange={(e) => updateJob(j._id, { rwmixread: Number(e.target.value) || 0 })}
-                              />
-                            </div>
-                          )}
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">RW</Label>
+                                            <Select value={j.rw} onValueChange={(v) => updateJobInTask(task._id, j._id, { rw: v })}>
+                                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                                              <SelectContent>
+                                                {options.rw_types.map((r) => (
+                                                  <SelectItem key={r} value={r}>{r}</SelectItem>
+                                                ))}
+                                              </SelectContent>
+                                            </Select>
+                                          </div>
 
-                            <div className="space-y-1.5">
-                              <Label className="text-xs">Rate (optional)</Label>
-                              <Input
-                                className="h-9"
-                                value={j.rate ?? ''}
-                                onChange={(e) => updateJob(j._id, { rate: e.target.value })}
-                                placeholder="1m, 500k"
-                              />
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">Block size</Label>
+                                            <Input className="h-9" value={j.bs} onChange={(e) => updateJobInTask(task._id, j._id, { bs: e.target.value })} placeholder="4k" />
+                                          </div>
+
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">Size</Label>
+                                            <Input className="h-9" value={j.size} onChange={(e) => updateJobInTask(task._id, j._id, { size: e.target.value })} placeholder="1G" />
+                                          </div>
+
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">Num jobs</Label>
+                                            <Input
+                                              className="h-9"
+                                              type="number"
+                                              min={1}
+                                              value={j.numjobs}
+                                              onChange={(e) => updateJobInTask(task._id, j._id, { numjobs: Number(e.target.value) || 1 })}
+                                            />
+                                          </div>
+
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">IO depth</Label>
+                                            <Input
+                                              className="h-9"
+                                              type="number"
+                                              min={1}
+                                              value={j.iodepth}
+                                              onChange={(e) => updateJobInTask(task._id, j._id, { iodepth: Number(e.target.value) || 1 })}
+                                            />
+                                          </div>
+
+                                          {showRwmix(j.rw) && (
+                                            <div className="space-y-1.5">
+                                              <Label className="text-xs">Read %</Label>
+                                              <Input
+                                                className="h-9"
+                                                type="number"
+                                                min={0}
+                                                max={100}
+                                                value={j.rwmixread}
+                                                onChange={(e) => updateJobInTask(task._id, j._id, { rwmixread: Number(e.target.value) || 0 })}
+                                              />
+                                            </div>
+                                          )}
+
+                                          <div className="space-y-1.5">
+                                            <Label className="text-xs">Rate (optional)</Label>
+                                            <Input
+                                              className="h-9"
+                                              value={j.rate ?? ''}
+                                              onChange={(e) => updateJobInTask(task._id, j._id, { rate: e.target.value })}
+                                              placeholder="1m, 500k"
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           </div>
                         </div>
                       )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           </CardContent>

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -171,6 +172,113 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	return e.state, nil
 }
 
+// RunTasks runs multiple fio tasks sequentially (one task after another)
+func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
+	e.mu.Lock()
+	if e.state != nil && e.state.Status == StatusRunning {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("fio is already running")
+	}
+
+	if len(tasks) == 0 {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("no tasks to run")
+	}
+
+	runID := fmt.Sprintf("run_%d", time.Now().Unix())
+	logPrefix := filepath.Join(e.WorkDir, runID)
+
+	e.state = &RunState{
+		ID:        runID,
+		Status:    StatusRunning,
+		StartTime: time.Now(),
+	}
+
+	e.outputCh = make(chan string, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	e.cancel = cancel
+	e.mu.Unlock()
+
+	go e.runTasksSequential(ctx, tasks, runID, logPrefix)
+
+	return e.state, nil
+}
+
+// runTasksSequential runs multiple tasks sequentially (one task after another)
+func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runID, logPrefix string) {
+	for i, task := range tasks {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if i > 0 {
+			// Log separator between tasks
+			select {
+			case e.outputCh <- fmt.Sprintf("\n--- Task %d/%d (%s) ---\n", i+1, len(tasks), task.Name):
+			default:
+			}
+		}
+
+		// Convert task to FioConfig
+		config := &FioConfig{
+			Global: task.Global,
+			Jobs:   task.Jobs,
+		}
+
+		// Generate jobfile for this task
+		hasStonewall := false
+		for _, job := range task.Jobs {
+			if job.StonewallAfter {
+				hasStonewall = true
+				break
+			}
+		}
+
+		var jobFile string
+		taskLogPrefix := filepath.Join(logPrefix, fmt.Sprintf("task%d", i))
+		if hasStonewall {
+			jobFile = filepath.Join(e.WorkDir, fmt.Sprintf("%s_task%d.fio", runID, i))
+			jobContent := config.ToINI(taskLogPrefix, -1)
+			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
+				e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
+				return
+			}
+		} else {
+			// Generate one jobfile per job in this task
+			if len(task.Jobs) == 0 {
+				continue
+			}
+			jobFile = filepath.Join(e.WorkDir, fmt.Sprintf("%s_task%d_job0.fio", runID, i))
+			jobContent := config.ToINI(taskLogPrefix, 0)
+			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
+				e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
+				return
+			}
+		}
+
+		// Run this task
+		e.runFio(ctx, config, jobFile, runID, taskLogPrefix, i)
+	}
+
+	// All tasks completed
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.streamParser != nil {
+		e.streamParser.Stop()
+	}
+
+	if e.state != nil && e.state.ID == runID {
+		e.state.EndTime = time.Now()
+		if e.state.Status == StatusRunning {
+			e.state.Status = StatusFinished
+		}
+	}
+}
+
 // runFioSequential runs multiple fio commands sequentially (one after another)
 func (e *Executor) runFioSequential(ctx context.Context, config *FioConfig, jobFiles []string, runID, logPrefix string) {
 	for i, jobFile := range jobFiles {
@@ -325,13 +433,102 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 		if e.state != nil && e.state.ID == runID {
 			// Don't overwrite existing error, but log this one
 			if e.state.Error == "" {
-				e.state.Error = fmt.Sprintf("Task group %d failed: %v", taskGroupIndex+1, err)
+				e.state.Error = fmt.Sprintf("Job %d failed: %v", jobIndex+1, err)
 			} else {
-				e.state.Error += fmt.Sprintf("; Task group %d: %v", taskGroupIndex+1, err)
+				e.state.Error += fmt.Sprintf("; Job %d: %v", jobIndex+1, err)
 			}
 			e.state.Status = StatusError
 		}
 		e.mu.Unlock()
+	}
+}
+
+type ValidationError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+type ValidationResult struct {
+	Valid   bool             `json:"valid"`
+	Errors  []ValidationError `json:"errors,omitempty"`
+	Warnings []ValidationError `json:"warnings,omitempty"`
+}
+
+// Validate checks if a fio configuration is valid using fio --parse-only
+func (e *Executor) Validate(config *FioConfig) ValidationResult {
+	if len(config.Jobs) == 0 {
+		return ValidationResult{
+			Valid: false,
+			Errors: []ValidationError{
+				{Field: "jobs", Message: "At least one job is required"},
+			},
+		}
+	}
+
+	// Generate jobfile content
+	logPrefix := filepath.Join(e.WorkDir, "validate")
+	hasStonewall := false
+	for _, job := range config.Jobs {
+		if job.StonewallAfter {
+			hasStonewall = true
+			break
+		}
+	}
+
+	var jobFile string
+	var jobContent string
+	if hasStonewall {
+		jobContent = config.ToINI(logPrefix, -1)
+	} else {
+		// Use first job for validation
+		jobContent = config.ToINI(logPrefix, 0)
+	}
+
+	// Write temporary jobfile
+	tmpFile := filepath.Join(e.WorkDir, "validate_tmp.fio")
+	if err := os.WriteFile(tmpFile, []byte(jobContent), 0644); err != nil {
+		return ValidationResult{
+			Valid: false,
+			Errors: []ValidationError{
+				{Field: "file", Message: fmt.Sprintf("Failed to create temp file: %v", err)},
+			},
+		}
+	}
+	defer os.Remove(tmpFile)
+	jobFile = tmpFile
+
+	// Run fio --parse-only to validate
+	args := []string{"--parse-only", jobFile}
+	cmd := exec.Command("fio", args...)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		// Parse error output
+		errorMsg := string(output)
+		return ValidationResult{
+			Valid: false,
+			Errors: []ValidationError{
+				{Field: "config", Message: errorMsg},
+			},
+		}
+	}
+
+	// Check for warnings in output
+	var warnings []ValidationError
+	outputStr := string(output)
+	if len(outputStr) > 0 && !strings.Contains(outputStr, "fio:") {
+		// Look for warning patterns
+		if strings.Contains(outputStr, "warning") || strings.Contains(outputStr, "WARNING") {
+			warnings = append(warnings, ValidationError{
+				Field:   "config",
+				Message: outputStr,
+			})
+		}
+	}
+
+	return ValidationResult{
+		Valid:    true,
+		Warnings: warnings,
 	}
 }
 

@@ -57,6 +57,18 @@ type FioConfig struct {
 	Sequential  bool         `json:"sequential"` // If true, run jobs sequentially (one fio command after another). If false, run in parallel.
 }
 
+// FioTask represents a complete fio command configuration
+type FioTask struct {
+	Name  string     `json:"name"`
+	Global GlobalConfig `json:"global"`
+	Jobs   []JobConfig  `json:"jobs"`
+}
+
+// FioTaskList contains multiple tasks to run sequentially
+type FioTaskList struct {
+	Tasks []FioTask `json:"tasks"`
+}
+
 func DefaultGlobalConfig() GlobalConfig {
 	return GlobalConfig{
 		IOEngine:       IOEngineLibaio,
@@ -119,13 +131,11 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	// If jobIndex is -1, generate all jobs with stonewall
 	if jobIndex == -1 {
 		for i, job := range c.Jobs {
-			if i > 0 {
-				// Check if previous job had stonewallAfter set
-				if c.Jobs[i-1].StonewallAfter {
-					sb.WriteString("stonewall\n")
-				}
-			}
 			sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
+			// Stonewall at the start of this job section means "wait for previous jobs to complete before starting this one"
+			if i > 0 && job.StonewallAfter {
+				sb.WriteString("stonewall\n")
+			}
 			// Job-level overrides for runtime and ioengine
 			if job.IOEngine != "" {
 				sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
