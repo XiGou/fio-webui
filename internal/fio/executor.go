@@ -91,19 +91,32 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 		return nil, fmt.Errorf("fio is already running")
 	}
 
+	if len(config.Jobs) == 0 {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("no jobs to run")
+	}
+
 	runID := fmt.Sprintf("run_%d", time.Now().Unix())
 	logPrefix := filepath.Join(e.WorkDir, runID)
-	jobFile := filepath.Join(e.WorkDir, runID+".fio")
 
-	jobContent := config.ToINI(logPrefix)
-	if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
-		e.mu.Unlock()
-		return nil, fmt.Errorf("failed to write job file: %w", err)
+	// Generate one jobfile per job (each job is a separate fio command)
+	jobFiles := make([]string, len(config.Jobs))
+	for i := range config.Jobs {
+		jobFile := filepath.Join(e.WorkDir, fmt.Sprintf("%s_job%d.fio", runID, i))
+		jobContent := config.ToINI(logPrefix, i)
+		if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
+			e.mu.Unlock()
+			return nil, fmt.Errorf("failed to write job file for job %d: %w", i, err)
+		}
+		jobFiles[i] = jobFile
+		if Debug {
+			log.Printf("[DEBUG] Generated FIO config for job %d (%s):\n%s\n", i, config.Jobs[i].Name, jobContent)
+		}
 	}
 
 	if Debug {
-		log.Printf("[DEBUG] Generated FIO config:\n%s\n", jobContent)
 		log.Printf("[DEBUG] Log prefix: %s\n", logPrefix)
+		log.Printf("[DEBUG] Jobs: %d, execution mode: %s\n", len(config.Jobs), map[bool]string{true: "sequential", false: "parallel"}[config.Sequential])
 	}
 
 	e.state = &RunState{
@@ -113,19 +126,92 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	}
 
 	e.outputCh = make(chan string, 100)
-	// e.logWatcher = NewLogWatcher(logPrefix)
-	// e.logWatcher.Start()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
 	e.mu.Unlock()
 
-	go e.runFio(ctx, config, jobFile, runID, logPrefix)
+	if config.Sequential {
+		go e.runFioSequential(ctx, config, jobFiles, runID, logPrefix)
+	} else {
+		go e.runFioParallel(ctx, config, jobFiles, runID, logPrefix)
+	}
 
 	return e.state, nil
 }
 
-func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID, logPrefix string) {
+// runFioSequential runs multiple fio commands sequentially (one after another)
+func (e *Executor) runFioSequential(ctx context.Context, config *FioConfig, jobFiles []string, runID, logPrefix string) {
+	for i, jobFile := range jobFiles {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		if i > 0 {
+			// Log separator between jobs
+			select {
+			case e.outputCh <- fmt.Sprintf("\n--- Job %d/%d (%s) ---\n", i+1, len(jobFiles), config.Jobs[i].Name):
+			default:
+			}
+		}
+
+		e.runFio(ctx, config, jobFile, runID, logPrefix, i)
+	}
+
+	// All jobs completed
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.streamParser != nil {
+		e.streamParser.Stop()
+	}
+
+	if e.state != nil && e.state.ID == runID {
+		e.state.EndTime = time.Now()
+		if e.state.Status == StatusRunning {
+			e.state.Status = StatusFinished
+		}
+	}
+}
+
+// runFioParallel runs multiple fio commands in parallel
+func (e *Executor) runFioParallel(ctx context.Context, config *FioConfig, jobFiles []string, runID, logPrefix string) {
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(jobFiles))
+
+	for i, jobFile := range jobFiles {
+		wg.Add(1)
+		go func(idx int, jf string) {
+			defer wg.Done()
+			select {
+			case e.outputCh <- fmt.Sprintf("\n--- Job %d/%d (%s) ---\n", idx+1, len(jobFiles), config.Jobs[idx].Name):
+			default:
+			}
+			e.runFio(ctx, config, jf, runID, logPrefix, idx)
+		}(i, jobFile)
+	}
+
+	wg.Wait()
+
+	// All jobs completed
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.streamParser != nil {
+		e.streamParser.Stop()
+	}
+
+	if e.state != nil && e.state.ID == runID {
+		e.state.EndTime = time.Now()
+		if e.state.Status == StatusRunning {
+			e.state.Status = StatusFinished
+		}
+	}
+}
+
+func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID, logPrefix string, jobIndex int) {
 	args := []string{}
 	if config.Global.OutputFormat != "" {
 		args = append(args, "--output-format="+config.Global.OutputFormat)
@@ -201,26 +287,20 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 
 	err = cmd.Wait()
 
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// if e.logWatcher != nil {
-	// 	e.logWatcher.Stop()
-	// }
-
-	if e.streamParser != nil {
-		e.streamParser.Stop()
-	}
-
-	if e.state != nil && e.state.ID == runID {
-		e.state.EndTime = time.Now()
-		e.state.Output = output
-		if err != nil {
+	// Note: error handling and final state update moved to runFioSequential
+	// This function only runs one jobfile, errors are accumulated
+	if err != nil {
+		e.mu.Lock()
+		if e.state != nil && e.state.ID == runID {
+			// Don't overwrite existing error, but log this one
+			if e.state.Error == "" {
+				e.state.Error = fmt.Sprintf("Task group %d failed: %v", taskGroupIndex+1, err)
+			} else {
+				e.state.Error += fmt.Sprintf("; Task group %d: %v", taskGroupIndex+1, err)
+			}
 			e.state.Status = StatusError
-			e.state.Error = err.Error()
-		} else {
-			e.state.Status = StatusFinished
 		}
+		e.mu.Unlock()
 	}
 }
 

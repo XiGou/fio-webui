@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -35,12 +35,38 @@ const FALLBACK_OPTIONS: OptionsResponse = {
   devices: [],
 }
 
+type JobDraft = JobConfig & { _id: string; _collapsed: boolean }
+
+function newJobDraft(base?: Partial<JobConfig>): JobDraft {
+  const now = Date.now().toString(36)
+  const rand = Math.random().toString(36).slice(2, 7)
+  return {
+    _id: `job_${now}_${rand}`,
+    _collapsed: false,
+    name: base?.name ?? 'job1',
+    filename: base?.filename ?? '/tmp/fio-test',
+    rw: base?.rw ?? 'randread',
+    bs: base?.bs ?? '4k',
+    size: base?.size ?? '1G',
+    numjobs: base?.numjobs ?? 1,
+    iodepth: base?.iodepth ?? 32,
+    rwmixread: base?.rwmixread ?? 70,
+    rate: base?.rate ?? '',
+  }
+}
+
 function buildConfig(
-  global: { ioengine: string; direct: boolean; runtime: number; log_avg_msec: number },
-  job: JobConfig,
-  extraJobs: JobConfig[]
+  global: {
+    ioengine: string
+    direct: boolean
+    runtime: number
+    log_avg_msec: number
+    output_format: string
+    status_interval: number
+  },
+  jobs: JobDraft[],
+  sequential: boolean
 ): FioConfig {
-  const jobs = [{ ...job }, ...extraJobs]
   return {
     global: {
       ioengine: global.ioengine,
@@ -49,11 +75,11 @@ function buildConfig(
       time_based: true,
       group_reporting: true,
       log_avg_msec: global.log_avg_msec,
-      output_format: 'json',
-      status_interval: 1,
+      output_format: global.output_format,
+      status_interval: global.status_interval,
     },
-    jobs: jobs.map((j) => ({
-      name: j.name || 'job1',
+    jobs: jobs.map((j, idx) => ({
+      name: (j.name || `job${idx + 1}`).trim() || `job${idx + 1}`,
       filename: j.filename,
       rw: j.rw,
       bs: j.bs,
@@ -63,6 +89,7 @@ function buildConfig(
       rwmixread: j.rwmixread,
       rate: j.rate || '',
     })),
+    sequential,
   }
 }
 
@@ -73,23 +100,17 @@ export default function App() {
     direct: true,
     runtime: 60,
     log_avg_msec: 500,
+    // CLI args (docs/fio_doc.md) - keep compact defaults
+    output_format: 'json',
+    status_interval: 1,
   })
-  const [job, setJob] = useState<JobConfig>({
-    name: 'job1',
-    filename: '/tmp/fio-test',
-    rw: 'randread',
-    bs: '4k',
-    size: '1G',
-    numjobs: 1,
-    iodepth: 32,
-    rwmixread: 70,
-    rate: '',
-  })
-  const [extraJobs, setExtraJobs] = useState<JobConfig[]>([])
+  const [jobs, setJobs] = useState<JobDraft[]>([newJobDraft()])
+  const [sequential, setSequential] = useState(true) // Default to sequential execution
   const [state, setState] = useState<RunState | null>(null)
   const [outputLines, setOutputLines] = useState<string[]>([])
   const [backendOffline, setBackendOffline] = useState(false)
   const [wsReconnecting, setWsReconnecting] = useState(false)
+  const [logPanelOpen, setLogPanelOpen] = useState(false)
   const outputEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -110,20 +131,30 @@ export default function App() {
             direct: def.global.direct ?? g.direct,
             runtime: def.global.runtime ?? g.runtime,
             log_avg_msec: def.global.log_avg_msec ?? g.log_avg_msec,
+            output_format: def.global.output_format ?? g.output_format,
+            status_interval: def.global.status_interval ?? g.status_interval,
           }))
         }
         if (def?.job) {
-          setJob((j) => ({
-            name: def.job.name ?? j.name,
-            filename: def.job.filename ?? j.filename,
-            rw: def.job.rw ?? j.rw,
-            bs: def.job.bs ?? j.bs,
-            size: def.job.size ?? j.size,
-            numjobs: def.job.numjobs ?? j.numjobs,
-            iodepth: def.job.iodepth ?? j.iodepth,
-            rwmixread: def.job.rwmixread ?? j.rwmixread,
-            rate: def.job.rate ?? j.rate,
-          }))
+          setJobs((prev) => {
+            if (prev.length === 0) return [newJobDraft(def.job)]
+            const first = prev[0]
+            return [
+              {
+                ...first,
+                name: def.job.name ?? first.name,
+                filename: def.job.filename ?? first.filename,
+                rw: def.job.rw ?? first.rw,
+                bs: def.job.bs ?? first.bs,
+                size: def.job.size ?? first.size,
+                numjobs: def.job.numjobs ?? first.numjobs,
+                iodepth: def.job.iodepth ?? first.iodepth,
+                rwmixread: def.job.rwmixread ?? first.rwmixread,
+                rate: def.job.rate ?? first.rate,
+              },
+              ...prev.slice(1),
+            ]
+          })
         }
       })
       .catch(() => {
@@ -192,12 +223,14 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    outputEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [outputLines])
+    if (logPanelOpen) {
+      outputEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [outputLines, logPanelOpen])
 
   const run = state?.status === 'running'
   const start = async () => {
-    const config = buildConfig(global, job, extraJobs)
+    const config = buildConfig(global, jobs, sequential)
     if (config.jobs.length === 0) return
     setOutputLines(['Starting test...'])
     const res = await fetch('/api/run', {
@@ -216,18 +249,60 @@ export default function App() {
     await fetch('/api/stop', { method: 'POST' })
   }
 
-  const addJob = () => {
-    setExtraJobs((prev) => [...prev, { ...job }])
-    setOutputLines((prev) => [...prev, `Added job: ${job.name || 'Unnamed'}`])
+  const jobCount = jobs.length
+  const runningLabel = useMemo(() => (state ? STATUS_LABEL[state.status] ?? state.status : 'Idle'), [state])
+
+  const collapseAllExcept = (id: string) => {
+    setJobs((prev) => prev.map((j) => ({ ...j, _collapsed: j._id !== id })))
   }
 
-  const removeJob = (i: number) => {
-    setExtraJobs((prev) => prev.filter((_, idx) => idx !== i))
+  const toggleCollapse = (id: string) => {
+    setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, _collapsed: !j._collapsed } : j)))
   }
 
-  const showRwmix =
-    job.rw === 'randrw' || job.rw === 'readwrite' || job.rw === 'rw' ||
-    job.rw === 'trimwrite' || job.rw === 'randtrimwrite'
+  const addJobAfter = (afterId?: string, template?: Partial<JobConfig>) => {
+    setJobs((prev) => {
+      const draft = newJobDraft(template)
+      const collapsedPrev = prev.map((j) => ({ ...j, _collapsed: true }))
+      if (!afterId) return [...collapsedPrev, draft]
+      const idx = prev.findIndex((j) => j._id === afterId)
+      if (idx < 0) return [...collapsedPrev, draft]
+      return [...collapsedPrev.slice(0, idx + 1), draft, ...collapsedPrev.slice(idx + 1)]
+    })
+  }
+
+  const duplicateJob = (id: string) => {
+    const src = jobs.find((j) => j._id === id)
+    if (!src) return
+    addJobAfter(id, src)
+  }
+
+  const removeJob = (id: string) => {
+    setJobs((prev) => {
+      const next = prev.filter((j) => j._id !== id)
+      if (next.length === 0) return [newJobDraft({ name: 'job1' })]
+      return next
+    })
+  }
+
+  const moveJob = (id: string, dir: -1 | 1) => {
+    setJobs((prev) => {
+      const idx = prev.findIndex((j) => j._id === id)
+      const to = idx + dir
+      if (idx < 0 || to < 0 || to >= prev.length) return prev
+      const copy = [...prev]
+      const [item] = copy.splice(idx, 1)
+      copy.splice(to, 0, item)
+      return copy
+    })
+  }
+
+  const updateJob = (id: string, patch: Partial<JobDraft>) => {
+    setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, ...patch } : j)))
+  }
+
+  const showRwmix = (rw: string) =>
+    rw === 'randrw' || rw === 'readwrite' || rw === 'rw' || rw === 'trimwrite' || rw === 'randtrimwrite'
 
   if (!options) {
     return (
@@ -238,42 +313,57 @@ export default function App() {
   }
 
   return (
-    <div className="container mx-auto max-w-6xl space-y-6 p-4">
-      <header className="flex items-center justify-between border-b pb-4">
-        <h1 className="text-2xl font-semibold text-primary">FIO WebUI</h1>
-        <div className="flex items-center gap-2">
+    <div className="min-h-screen bg-background">
+      <div className="container mx-auto max-w-7xl space-y-5 p-6">
+      <header className="flex items-center justify-between border-b border-border pb-4">
+        <div className="space-y-0.5">
+          <h1 className="text-xl font-semibold text-foreground">FIO WebUI</h1>
+          <p className="text-xs text-muted-foreground">
+            {jobCount} job{jobCount > 1 ? 's' : ''} · {sequential ? 'sequential' : 'parallel'} execution
+          </p>
+        </div>
+        <div className="flex items-center gap-4">
           {wsReconnecting && (
-            <span className="text-xs text-muted-foreground">正在重连…</span>
+            <span className="text-xs text-muted-foreground">Reconnecting…</span>
           )}
-          <span
-            className={`rounded-full px-3 py-1 text-sm font-medium ${
-              run ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400' :
-              state?.status === 'finished' ? 'bg-green-500/20 text-green-700 dark:text-green-400' :
-              state?.status === 'error' ? 'bg-destructive/20 text-destructive' :
-              'bg-muted text-muted-foreground'
-            }`}
-          >
-            {state ? STATUS_LABEL[state.status] ?? state.status : 'Idle'}
-          </span>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-muted-foreground">Status:</span>
+            <span className="font-medium text-foreground">{runningLabel}</span>
+          </div>
         </div>
       </header>
 
       {backendOffline && (
-        <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-          <strong>后端未连接。</strong> 请先启动服务：<code className="rounded bg-black/10 px-1.5 py-0.5">./fio-webui</code>（默认 :8080）。当前使用默认选项，配置可填但运行需后端。
+        <div className="rounded border border-border bg-muted/50 px-4 py-3 text-sm text-foreground">
+          <strong>Backend offline.</strong> Start server: <code className="rounded bg-background px-1.5 py-0.5 font-mono text-xs">./fio-webui</code> (default :8080). Using fallback options.
         </div>
       )}
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle>Test Configuration</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base font-medium">Configuration</CardTitle>
+                <div className="flex gap-2">
+                  <Button onClick={start} disabled={run} variant={run ? "secondary" : "default"}>
+                    Start
+                  </Button>
+                  <Button onClick={stop} disabled={!run} variant="secondary">
+                    Stop
+                  </Button>
+                </div>
+              </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-medium text-foreground">Global Settings</h3>
+                <span className="text-xs text-muted-foreground">fio CLI + job defaults</span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <div className="space-y-2">
-              <Label>IO Engine</Label>
+              <Label className="text-xs">IO Engine</Label>
               <Select value={global.ioengine} onValueChange={(v) => setGlobal((g) => ({ ...g, ioengine: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {options.io_engines.map((e) => (
                     <SelectItem key={e} value={e}>{e}</SelectItem>
@@ -281,149 +371,276 @@ export default function App() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center gap-2 pt-8">
+            <div className="flex items-center gap-2 pt-6">
               <Switch checked={global.direct} onCheckedChange={(v) => setGlobal((g) => ({ ...g, direct: v }))} />
-              <Label>Direct IO</Label>
+              <Label className="text-xs">Direct I/O</Label>
             </div>
             <div className="space-y-2">
-              <Label>Runtime (sec)</Label>
+              <Label className="text-xs">Runtime (sec)</Label>
               <Input
                 type="number"
                 min={1}
+                className="h-9"
                 value={global.runtime}
                 onChange={(e) => setGlobal((g) => ({ ...g, runtime: Number(e.target.value) || 60 }))}
               />
             </div>
             <div className="space-y-2">
-              <Label>Log sampling (ms)</Label>
+              <Label className="text-xs">Log sampling (ms)</Label>
               <Input
                 type="number"
                 min={100}
+                className="h-9"
                 value={global.log_avg_msec}
                 onChange={(e) => setGlobal((g) => ({ ...g, log_avg_msec: Number(e.target.value) || 500 }))}
               />
             </div>
-          </div>
-
-          <div className="border-t pt-4">
-            <h3 className="mb-3 text-sm font-medium">Job</h3>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="space-y-2">
-                <Label>Job name</Label>
-                <Input value={job.name} onChange={(e) => setJob((j) => ({ ...j, name: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Filename / Device</Label>
-                <Input
-                  value={job.filename}
-                  onChange={(e) => setJob((j) => ({ ...j, filename: e.target.value }))}
-                  list="devices-list"
-                  placeholder="/dev/sda or /path/to/file"
-                />
-                <datalist id="devices-list">
-                  {options.devices.map((d) => <option key={d} value={d} />)}
-                </datalist>
-              </div>
-              <div className="space-y-2">
-                <Label>Read/Write</Label>
-                <Select value={job.rw} onValueChange={(v) => setJob((j) => ({ ...j, rw: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {options.rw_types.map((r) => (
-                      <SelectItem key={r} value={r}>{r}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Block size</Label>
-                <Input value={job.bs} onChange={(e) => setJob((j) => ({ ...j, bs: e.target.value }))} placeholder="4k" />
-              </div>
-              <div className="space-y-2">
-                <Label>Size</Label>
-                <Input value={job.size} onChange={(e) => setJob((j) => ({ ...j, size: e.target.value }))} placeholder="1G" />
-              </div>
-              <div className="space-y-2">
-                <Label>Num jobs</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={job.numjobs}
-                  onChange={(e) => setJob((j) => ({ ...j, numjobs: Number(e.target.value) || 1 }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>IO depth</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={job.iodepth}
-                  onChange={(e) => setJob((j) => ({ ...j, iodepth: Number(e.target.value) || 1 }))}
-                />
-              </div>
-              {showRwmix && (
-                <div className="space-y-2">
-                  <Label>Read %</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={job.rwmixread}
-                    onChange={(e) => setJob((j) => ({ ...j, rwmixread: Number(e.target.value) || 0 }))}
-                  />
-                </div>
-              )}
-              <div className="space-y-2">
-                <Label>Rate (optional)</Label>
-                <Input value={job.rate ?? ''} onChange={(e) => setJob((j) => ({ ...j, rate: e.target.value }))} placeholder="1m, 500k" />
-              </div>
-            </div>
-            <Button type="button" variant="secondary" className="mt-3" onClick={addJob}>
-              Add job
-            </Button>
-          </div>
-
-          {extraJobs.length > 0 && (
             <div className="space-y-2">
-              <Label>Extra jobs</Label>
-              <ul className="space-y-2">
-                {extraJobs.map((j, i) => (
-                  <li key={i} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
-                    <span>{j.name || `Job ${i + 2}`} — {j.filename} {j.rw} {j.bs}</span>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => removeJob(i)}>
-                      Remove
-                    </Button>
-                  </li>
-                ))}
-              </ul>
+              <Label className="text-xs">Output format</Label>
+              <Select
+                value={global.output_format}
+                onValueChange={(v) => setGlobal((g) => ({ ...g, output_format: v }))}
+              >
+                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['json', 'json+', 'normal', 'terse'].map((f) => (
+                    <SelectItem key={f} value={f}>{f}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-          )}
-
-          <div className="flex gap-2">
-            <Button onClick={start} disabled={run}>
-              Start test
-            </Button>
-            <Button variant="destructive" onClick={stop} disabled={!run}>
-              Stop
-            </Button>
+            <div className="space-y-2">
+              <Label className="text-xs">Status interval (sec)</Label>
+              <Input
+                type="number"
+                min={0}
+                className="h-9"
+                value={global.status_interval}
+                onChange={(e) => setGlobal((g) => ({ ...g, status_interval: Number(e.target.value) || 0 }))}
+              />
+            </div>
           </div>
-        </CardContent>
-      </Card>
+            </div>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle>Output log</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="output-terminal">
-            {outputLines.length === 0 && <span className="text-muted-foreground">Output will appear here.</span>}
-            {outputLines.map((line, i) => (
-              <div key={i} dangerouslySetInnerHTML={{ __html: ansiToHtml(line) }} />
-            ))}
-            <div ref={outputEndRef} />
+            <div className="border-t border-border pt-4">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-medium text-foreground">Jobs</h3>
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <Switch checked={sequential} onCheckedChange={setSequential} />
+                    <Label className="text-xs">Sequential execution</Label>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => addJobAfter(undefined, { name: `job${jobs.length + 1}` })}
+                    >
+                      Add Job
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => collapseAllExcept(jobs[0]?._id)}
+                      disabled={jobs.length === 0}
+                    >
+                      Collapse Others
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {jobs.map((j, idx) => (
+                  <div key={j._id} className="rounded border border-border bg-card">
+                    <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left hover:opacity-80"
+                        onClick={() => toggleCollapse(j._id)}
+                        title={j._collapsed ? 'Expand' : 'Collapse'}
+                      >
+                        <span className="w-5 text-xs font-medium text-muted-foreground">{idx + 1}</span>
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {j.name?.trim() || `job${idx + 1}`}
+                          </div>
+                          <div className="truncate text-xs text-muted-foreground">
+                            {j.rw} · {j.bs} · depth {j.iodepth} · {j.numjobs}× · {j.filename}
+                          </div>
+                        </div>
+                      </button>
+
+                      <div className="flex items-center gap-0.5">
+                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, -1)} disabled={idx === 0}>
+                          ↑
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, 1)} disabled={idx === jobs.length - 1}>
+                          ↓
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateJob(j._id)}>
+                          Copy
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addJobAfter(j._id, { name: `job${jobs.length + 1}` })}>
+                          + After
+                        </Button>
+                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeJob(j._id)} disabled={jobs.length === 1}>
+                          Remove
+                        </Button>
+                      </div>
+                    </div>
+
+                    {!j._collapsed && (
+                      <div className="border-t border-border px-3 py-3">
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Job name</Label>
+                            <Input
+                              className="h-9"
+                              value={j.name}
+                              onChange={(e) => updateJob(j._id, { name: e.target.value })}
+                              onFocus={() => collapseAllExcept(j._id)}
+                            />
+                          </div>
+
+                          <div className="space-y-1.5 sm:col-span-2">
+                            <Label className="text-xs">Filename / Device</Label>
+                            <Input
+                              className="h-9"
+                              value={j.filename}
+                              onChange={(e) => updateJob(j._id, { filename: e.target.value })}
+                              list="devices-list"
+                              placeholder="/dev/nvme0n1 or /path/to/file"
+                              onFocus={() => collapseAllExcept(j._id)}
+                            />
+                            <datalist id="devices-list">
+                              {options.devices.map((d) => <option key={d} value={d} />)}
+                            </datalist>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">RW</Label>
+                            <Select value={j.rw} onValueChange={(v) => updateJob(j._id, { rw: v })}>
+                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {options.rw_types.map((r) => (
+                                  <SelectItem key={r} value={r}>{r}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Block size</Label>
+                            <Input className="h-9" value={j.bs} onChange={(e) => updateJob(j._id, { bs: e.target.value })} placeholder="4k" />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Size</Label>
+                            <Input className="h-9" value={j.size} onChange={(e) => updateJob(j._id, { size: e.target.value })} placeholder="1G" />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Num jobs</Label>
+                            <Input
+                              className="h-9"
+                              type="number"
+                              min={1}
+                              value={j.numjobs}
+                              onChange={(e) => updateJob(j._id, { numjobs: Number(e.target.value) || 1 })}
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">IO depth</Label>
+                            <Input
+                              className="h-9"
+                              type="number"
+                              min={1}
+                              value={j.iodepth}
+                              onChange={(e) => updateJob(j._id, { iodepth: Number(e.target.value) || 1 })}
+                            />
+                          </div>
+
+                          {showRwmix(j.rw) && (
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Read %</Label>
+                              <Input
+                                className="h-9"
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={j.rwmixread}
+                                onChange={(e) => updateJob(j._id, { rwmixread: Number(e.target.value) || 0 })}
+                              />
+                            </div>
+                          )}
+
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Rate (optional)</Label>
+                            <Input
+                              className="h-9"
+                              value={j.rate ?? ''}
+                              onChange={(e) => updateJob(j._id, { rate: e.target.value })}
+                              placeholder="1m, 500k"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Floating log button */}
+      <button
+        type="button"
+        onClick={() => setLogPanelOpen(true)}
+        className="fixed bottom-6 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card shadow-lg hover:bg-muted transition-colors"
+        title="View output log"
+      >
+        <span className="text-sm font-medium text-foreground">Log</span>
+        {outputLines.length > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-foreground text-xs font-medium text-background">
+            {outputLines.length > 99 ? '99+' : outputLines.length}
+          </span>
+        )}
+      </button>
+
+      {/* Log panel overlay */}
+      {logPanelOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-50 bg-black/20 backdrop-blur-sm"
+            onClick={() => setLogPanelOpen(false)}
+          />
+          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-2xl border-l border-border bg-card shadow-xl">
+            <div className="flex h-full flex-col">
+              <div className="flex items-center justify-between border-b border-border px-4 py-3">
+                <h2 className="text-base font-medium text-foreground">Output Log</h2>
+                <Button variant="ghost" size="sm" onClick={() => setLogPanelOpen(false)}>
+                  ×
+                </Button>
+              </div>
+              <div className="flex-1 overflow-auto p-4">
+                <div className="output-terminal">
+                  {outputLines.length === 0 && <span className="text-muted-foreground">Output will appear here.</span>}
+                  {outputLines.map((line, i) => (
+                    <div key={i} dangerouslySetInnerHTML={{ __html: ansiToHtml(line) }} />
+                  ))}
+                  <div ref={outputEndRef} />
+                </div>
+              </div>
+            </div>
           </div>
-        </CardContent>
-      </Card>
+        </>
+      )}
     </div>
   )
 }

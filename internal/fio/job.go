@@ -49,8 +49,9 @@ type JobConfig struct {
 }
 
 type FioConfig struct {
-	Global GlobalConfig `json:"global"`
-	Jobs   []JobConfig  `json:"jobs"`
+	Global      GlobalConfig `json:"global"`
+	Jobs        []JobConfig  `json:"jobs"`
+	Sequential  bool         `json:"sequential"` // If true, run jobs sequentially (one fio command after another). If false, run in parallel.
 }
 
 func DefaultGlobalConfig() GlobalConfig {
@@ -79,7 +80,13 @@ func DefaultJobConfig() JobConfig {
 	}
 }
 
-func (c *FioConfig) ToINI(logPrefix string) string {
+// ToINI generates a jobfile for a single job (one fio command per job)
+func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
+	if jobIndex < 0 || jobIndex >= len(c.Jobs) {
+		return ""
+	}
+	job := c.Jobs[jobIndex]
+
 	var sb strings.Builder
 
 	sb.WriteString("[global]\n")
@@ -110,20 +117,19 @@ func (c *FioConfig) ToINI(logPrefix string) string {
 		sb.WriteString("per_job_logs=0\n")
 	}
 
-	for _, job := range c.Jobs {
-		sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
-		sb.WriteString(fmt.Sprintf("filename=%s\n", job.Filename))
-		sb.WriteString(fmt.Sprintf("rw=%s\n", job.RW))
-		sb.WriteString(fmt.Sprintf("bs=%s\n", job.BS))
-		sb.WriteString(fmt.Sprintf("size=%s\n", job.Size))
-		sb.WriteString(fmt.Sprintf("numjobs=%d\n", job.NumJobs))
-		sb.WriteString(fmt.Sprintf("iodepth=%d\n", job.IODepth))
-		if job.RW == RWRandRW || job.RW == RWReadWrite || job.RW == "rw" {
-			sb.WriteString(fmt.Sprintf("rwmixread=%d\n", job.RWMixRead))
-		}
-		if job.Rate != "" {
-			sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
-		}
+	// Single job - no stonewall needed, each job is a separate fio command
+	sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
+	sb.WriteString(fmt.Sprintf("filename=%s\n", job.Filename))
+	sb.WriteString(fmt.Sprintf("rw=%s\n", job.RW))
+	sb.WriteString(fmt.Sprintf("bs=%s\n", job.BS))
+	sb.WriteString(fmt.Sprintf("size=%s\n", job.Size))
+	sb.WriteString(fmt.Sprintf("numjobs=%d\n", job.NumJobs))
+	sb.WriteString(fmt.Sprintf("iodepth=%d\n", job.IODepth))
+	if job.RW == RWRandRW || job.RW == RWReadWrite || job.RW == "rw" {
+		sb.WriteString(fmt.Sprintf("rwmixread=%d\n", job.RWMixRead))
+	}
+	if job.Rate != "" {
+		sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
 	}
 
 	return sb.String()

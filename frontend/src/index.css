@@ -57,19 +57,21 @@
   }
 }
 
-/* Output log / ANSI */
+/* Output log / ANSI - neutral monochrome style */
 .output-terminal {
-  @apply rounded-md border bg-zinc-950 p-3 font-mono text-sm text-zinc-100 overflow-auto max-h-[400px];
+  @apply rounded border border-border bg-background p-3 font-mono text-sm text-foreground;
+  min-height: 200px;
 }
-.ansi-31 { color: #ef4444; }
-.ansi-32 { color: #22c55e; }
-.ansi-33 { color: #eab308; }
-.ansi-34 { color: #3b82f6; }
-.ansi-35 { color: #d946ef; }
-.ansi-36 { color: #06b6d4; }
-.ansi-91 { color: #f87171; }
-.ansi-92 { color: #4ade80; }
-.ansi-93 { color: #facc15; }
-.ansi-94 { color: #60a5fa; }
-.ansi-95 { color: #e879f9; }
-.ansi-96 { color: #22d3ee; }
+/* Reduced saturation ANSI colors for professional look */
+.ansi-31 { color: #dc2626; } /* red - errors */
+.ansi-32 { color: #16a34a; } /* green - success */
+.ansi-33 { color: #ca8a04; } /* yellow - warnings */
+.ansi-34 { color: #2563eb; } /* blue - info */
+.ansi-35 { color: #9333ea; } /* magenta */
+.ansi-36 { color: #0891b2; } /* cyan */
+.ansi-91 { color: #dc2626; }
+.ansi-92 { color: #16a34a; }
+.ansi-93 { color: #ca8a04; }
+.ansi-94 { color: #2563eb; }
+.ansi-95 { color: #9333ea; }
+.ansi-96 { color: #0891b2; }

@@ -30,6 +30,7 @@ export interface JobConfig {
 export interface FioConfig {
   global: GlobalConfig
   jobs: JobConfig[]
+  sequential?: boolean // If true, run jobs sequentially. If false, run in parallel.
 }
 
 export type RunStatus = 'idle' | 'running' | 'finished' | 'error'
