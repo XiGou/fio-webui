@@ -99,14 +99,7 @@ func (c *FioConfig) ToINI(logPrefix string) string {
 	if c.Global.LogAvgMsec > 0 {
 		sb.WriteString(fmt.Sprintf("log_avg_msec=%d\n", c.Global.LogAvgMsec))
 	}
-	// Enable output format for JSON status output
-	if c.Global.OutputFormat != "" {
-		sb.WriteString(fmt.Sprintf("output-format=%s\n", c.Global.OutputFormat))
-	}
-	// Enable status-interval for real-time JSON status output
-	if c.Global.StatusInterval > 0 {
-		sb.WriteString(fmt.Sprintf("status-interval=%d\n", c.Global.StatusInterval))
-	}
+	// output-format 与 status-interval 为 fio 命令行参数，见 executor.runFio
 	// Enable real-time log output with aggressive flushing
 	sb.WriteString("log_hist_msec=200\n")
 	sb.WriteString("log_max_value=1\n")

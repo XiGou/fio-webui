@@ -8,37 +8,15 @@ import (
 	"github.com/gouxi/fio-webui/internal/fio"
 )
 
-type PageData struct {
-	IOEngines []string
-	RWTypes   []string
-	Devices   []string
-	Global    fio.GlobalConfig
-	Job       fio.JobConfig
-}
-
 type OptionsResponse struct {
 	IOEngines []string `json:"io_engines"`
 	RWTypes   []string `json:"rw_types"`
 	Devices   []string `json:"devices"`
 }
 
-func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-
-	data := PageData{
-		IOEngines: fio.GetIOEngines(),
-		RWTypes:   fio.GetRWTypes(),
-		Devices:   fio.GetBlockDevices(),
-		Global:    fio.DefaultGlobalConfig(),
-		Job:       fio.DefaultJobConfig(),
-	}
-
-	if err := s.templates.ExecuteTemplate(w, "index.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+type DefaultsResponse struct {
+	Global fio.GlobalConfig `json:"global"`
+	Job    fio.JobConfig    `json:"job"`
 }
 
 func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +30,19 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 		IOEngines: fio.GetIOEngines(),
 		RWTypes:   fio.GetRWTypes(),
 		Devices:   fio.GetBlockDevices(),
+	})
+}
+
+func (s *Server) handleDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(DefaultsResponse{
+		Global: fio.DefaultGlobalConfig(),
+		Job:    fio.DefaultJobConfig(),
 	})
 }
 

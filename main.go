@@ -4,11 +4,13 @@ import (
 	"embed"
 	"flag"
 	"log"
+	"os"
+	"os/signal"
 
 	"github.com/gouxi/fio-webui/internal/server"
 )
 
-//go:embed web/templates/* web/static/*
+//go:embed web/dist/*
 var webFS embed.FS
 
 func main() {
@@ -21,5 +23,15 @@ func main() {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 
-	log.Fatal(srv.Run())
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		<-sig
+		log.Println("Shutting down...")
+		srv.Shutdown()
+	}()
+
+	if err := srv.Run(); err != nil {
+		log.Fatal(err)
+	}
 }

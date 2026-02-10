@@ -120,13 +120,21 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	e.cancel = cancel
 	e.mu.Unlock()
 
-	go e.runFio(ctx, jobFile, runID, logPrefix)
+	go e.runFio(ctx, config, jobFile, runID, logPrefix)
 
 	return e.state, nil
 }
 
-func (e *Executor) runFio(ctx context.Context, jobFile, runID, logPrefix string) {
-	cmd := exec.CommandContext(ctx, "fio", jobFile)
+func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID, logPrefix string) {
+	args := []string{}
+	if config.Global.OutputFormat != "" {
+		args = append(args, "--output-format="+config.Global.OutputFormat)
+	}
+	if config.Global.StatusInterval > 0 {
+		args = append(args, fmt.Sprintf("--status-interval=%d", config.Global.StatusInterval))
+	}
+	args = append(args, jobFile)
+	cmd := exec.CommandContext(ctx, "fio", args...)
 
 	// Store cmd reference for stopping
 	e.mu.Lock()

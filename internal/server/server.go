@@ -1,12 +1,13 @@
 package server
 
 import (
+	"context"
 	"embed"
-	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/gouxi/fio-webui/internal/fio"
@@ -17,12 +18,12 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	executor  *fio.Executor
-	templates *template.Template
-	staticFS  fs.FS
-	addr      string
-	debug     bool
-	logDir    string // Temporary directory for io logs
+	executor   *fio.Executor
+	staticFS   fs.FS
+	addr       string
+	debug      bool
+	logDir     string
+	shutdownCh chan struct{} // 关闭后 Run() 退出并做优雅 Shutdown
 }
 
 func New(addr string, webFS embed.FS, debug bool) (*Server, error) {
@@ -48,39 +49,27 @@ func New(addr string, webFS embed.FS, debug bool) (*Server, error) {
 		log.Printf("Log directory: %s", logDir)
 	}
 
-	templatesFS, err := fs.Sub(webFS, "web/templates")
-	if err != nil {
-		os.RemoveAll(logDir)
-		return nil, err
-	}
-
-	tmpl, err := template.ParseFS(templatesFS, "*.html")
-	if err != nil {
-		os.RemoveAll(logDir)
-		return nil, err
-	}
-
-	staticFS, err := fs.Sub(webFS, "web/static")
+	distFS, err := fs.Sub(webFS, "web/dist")
 	if err != nil {
 		os.RemoveAll(logDir)
 		return nil, err
 	}
 
 	return &Server{
-		executor:  fio.NewExecutor(logDir),
-		templates: tmpl,
-		staticFS:  staticFS,
-		addr:      addr,
-		debug:     debug,
-		logDir:    logDir,
+		executor:   fio.NewExecutor(logDir),
+		staticFS:   distFS,
+		addr:       addr,
+		debug:      debug,
+		logDir:     logDir,
+		shutdownCh: make(chan struct{}),
 	}, nil
 }
 
 func (s *Server) Run() error {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/api/options", s.handleOptions)
+	mux.HandleFunc("/api/defaults", s.handleDefaults)
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/status", s.handleStatus)
@@ -89,12 +78,28 @@ func (s *Server) Run() error {
 		mux.HandleFunc("/api/debug/files", s.handleDebugFiles)
 		log.Println("Debug mode enabled")
 	}
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(s.staticFS))))
+	mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
+
+	srv := &http.Server{ Addr: s.addr, Handler: mux }
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
 
 	log.Printf("Server starting on %s", s.addr)
+	<-s.shutdownCh
 	defer s.Cleanup()
-	return http.ListenAndServe(s.addr, mux)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Shutdown: %v", err)
+	}
+	return nil
 }
+
+// Shutdown 触发优雅退出（供 signal 或测试调用）
+func (s *Server) Shutdown() { close(s.shutdownCh) }
 
 // Cleanup removes temporary log directory
 func (s *Server) Cleanup() {
