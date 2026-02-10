@@ -35,7 +35,7 @@ const FALLBACK_OPTIONS: OptionsResponse = {
   devices: [],
 }
 
-type JobDraft = JobConfig & { _id: string; _collapsed: boolean }
+type JobDraft = JobConfig & { _id: string; _collapsed: boolean; _stonewallAfter?: boolean } // If true, insert stonewall after this job. JobConfig may include runtime and ioengine overrides.
 
 function newJobDraft(base?: Partial<JobConfig>): JobDraft {
   const now = Date.now().toString(36)
@@ -64,9 +64,11 @@ function buildConfig(
     output_format: string
     status_interval: number
   },
-  jobs: JobDraft[],
-  sequential: boolean
+  jobs: JobDraft[]
 ): FioConfig {
+  // Check if any job has stonewall set
+  const hasStonewall = jobs.some((j) => j._stonewallAfter)
+  
   return {
     global: {
       ioengine: global.ioengine,
@@ -88,8 +90,11 @@ function buildConfig(
       iodepth: j.iodepth,
       rwmixread: j.rwmixread,
       rate: j.rate || '',
+      stonewallAfter: j._stonewallAfter || false,
+      runtime: j.runtime,
+      ioengine: j.ioengine,
     })),
-    sequential,
+    sequential: !hasStonewall, // If stonewall is used, jobs are in one file, so sequential is not needed
   }
 }
 
@@ -105,7 +110,6 @@ export default function App() {
     status_interval: 1,
   })
   const [jobs, setJobs] = useState<JobDraft[]>([newJobDraft()])
-  const [sequential, setSequential] = useState(true) // Default to sequential execution
   const [state, setState] = useState<RunState | null>(null)
   const [outputLines, setOutputLines] = useState<string[]>([])
   const [backendOffline, setBackendOffline] = useState(false)
@@ -230,7 +234,7 @@ export default function App() {
 
   const run = state?.status === 'running'
   const start = async () => {
-    const config = buildConfig(global, jobs, sequential)
+    const config = buildConfig(global, jobs)
     if (config.jobs.length === 0) return
     setOutputLines(['Starting test...'])
     const res = await fetch('/api/run', {
@@ -301,6 +305,10 @@ export default function App() {
     setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, ...patch } : j)))
   }
 
+  const toggleStonewall = (id: string) => {
+    setJobs((prev) => prev.map((j) => (j._id === id ? { ...j, _stonewallAfter: !j._stonewallAfter } : j)))
+  }
+
   const showRwmix = (rw: string) =>
     rw === 'randrw' || rw === 'readwrite' || rw === 'rw' || rw === 'trimwrite' || rw === 'randtrimwrite'
 
@@ -319,7 +327,7 @@ export default function App() {
         <div className="space-y-0.5">
           <h1 className="text-xl font-semibold text-foreground">FIO WebUI</h1>
           <p className="text-xs text-muted-foreground">
-            {jobCount} job{jobCount > 1 ? 's' : ''} · {sequential ? 'sequential' : 'parallel'} execution
+            {jobCount} job{jobCount > 1 ? 's' : ''} · {jobs.some((j) => j._stonewallAfter) ? 'stonewall groups' : 'parallel execution'}
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -425,103 +433,146 @@ export default function App() {
             <div className="border-t border-border pt-4">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-sm font-medium text-foreground">Jobs</h3>
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <Switch checked={sequential} onCheckedChange={setSequential} />
-                    <Label className="text-xs">Sequential execution</Label>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => addJobAfter(undefined, { name: `job${jobs.length + 1}` })}
-                    >
-                      Add Job
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => collapseAllExcept(jobs[0]?._id)}
-                      disabled={jobs.length === 0}
-                    >
-                      Collapse Others
-                    </Button>
-                  </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => addJobAfter(undefined, { name: `job${jobs.length + 1}` })}
+                  >
+                    Add Job
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => collapseAllExcept(jobs[0]?._id)}
+                    disabled={jobs.length === 0}
+                  >
+                    Collapse Others
+                  </Button>
                 </div>
               </div>
 
               <div className="space-y-2">
                 {jobs.map((j, idx) => (
-                  <div key={j._id} className="rounded border border-border bg-card">
-                    <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-                      <button
-                        type="button"
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left hover:opacity-80"
-                        onClick={() => toggleCollapse(j._id)}
-                        title={j._collapsed ? 'Expand' : 'Collapse'}
-                      >
-                        <span className="w-5 text-xs font-medium text-muted-foreground">{idx + 1}</span>
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-foreground">
-                            {j.name?.trim() || `job${idx + 1}`}
-                          </div>
-                          <div className="truncate text-xs text-muted-foreground">
-                            {j.rw} · {j.bs} · depth {j.iodepth} · {j.numjobs}× · {j.filename}
-                          </div>
+                  <div key={j._id}>
+                    {/* Stonewall divider - show before job if previous job has stonewallAfter */}
+                    {idx > 0 && jobs[idx - 1]._stonewallAfter && (
+                      <div className="relative my-4">
+                        <div className="absolute inset-0 flex items-center">
+                          <div className="w-full border-t border-dashed border-muted-foreground/40"></div>
                         </div>
-                      </button>
-
-                      <div className="flex items-center gap-0.5">
-                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, -1)} disabled={idx === 0}>
-                          ↑
-                        </Button>
-                        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, 1)} disabled={idx === jobs.length - 1}>
-                          ↓
-                        </Button>
-                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateJob(j._id)}>
-                          Copy
-                        </Button>
-                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addJobAfter(j._id, { name: `job${jobs.length + 1}` })}>
-                          + After
-                        </Button>
-                        <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeJob(j._id)} disabled={jobs.length === 1}>
-                          Remove
-                        </Button>
+                        <div className="relative flex justify-center">
+                          <span className="bg-background px-2 text-xs font-medium text-muted-foreground">Stonewall — Sequential Execution</span>
+                        </div>
                       </div>
-                    </div>
-
-                    {!j._collapsed && (
-                      <div className="border-t border-border px-3 py-3">
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">Job name</Label>
-                            <Input
-                              className="h-9"
-                              value={j.name}
-                              onChange={(e) => updateJob(j._id, { name: e.target.value })}
-                              onFocus={() => collapseAllExcept(j._id)}
-                            />
+                    )}
+                    <div className="rounded border border-border bg-card">
+                      <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left hover:opacity-80"
+                          onClick={() => toggleCollapse(j._id)}
+                          title={j._collapsed ? 'Expand' : 'Collapse'}
+                        >
+                          <span className="w-5 text-xs font-medium text-muted-foreground">{idx + 1}</span>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-foreground">
+                              {j.name?.trim() || `job${idx + 1}`}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              {j.rw} · {j.bs} · depth {j.iodepth} · {j.numjobs}× · {j.filename}
+                            </div>
                           </div>
+                        </button>
 
-                          <div className="space-y-1.5 sm:col-span-2">
-                            <Label className="text-xs">Filename / Device</Label>
-                            <Input
-                              className="h-9"
-                              value={j.filename}
-                              onChange={(e) => updateJob(j._id, { filename: e.target.value })}
-                              list="devices-list"
-                              placeholder="/dev/nvme0n1 or /path/to/file"
-                              onFocus={() => collapseAllExcept(j._id)}
-                            />
-                            <datalist id="devices-list">
-                              {options.devices.map((d) => <option key={d} value={d} />)}
-                            </datalist>
+                        <div className="flex items-center gap-0.5">
+                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, -1)} disabled={idx === 0}>
+                            ↑
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveJob(j._id, 1)} disabled={idx === jobs.length - 1}>
+                            ↓
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateJob(j._id)}>
+                            Copy
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addJobAfter(j._id, { name: `job${jobs.length + 1}` })}>
+                            + After
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeJob(j._id)} disabled={jobs.length === 1}>
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+
+                      {!j._collapsed && (
+                        <div className="border-t border-border px-3 py-3">
+                          <div className="mb-3 flex items-center justify-between border-b border-border pb-2">
+                            <Label className="text-xs font-medium">Job Parameters</Label>
+                            <div className="flex items-center gap-2">
+                              <Switch checked={j._stonewallAfter || false} onCheckedChange={() => toggleStonewall(j._id)} />
+                              <Label className="text-xs">Stonewall after this job</Label>
+                            </div>
                           </div>
+                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Job name</Label>
+                              <Input
+                                className="h-9"
+                                value={j.name}
+                                onChange={(e) => updateJob(j._id, { name: e.target.value })}
+                                onFocus={() => collapseAllExcept(j._id)}
+                              />
+                            </div>
 
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">RW</Label>
+                            <div className="space-y-1.5 sm:col-span-2">
+                              <Label className="text-xs">Filename / Device</Label>
+                              <Input
+                                className="h-9"
+                                value={j.filename}
+                                onChange={(e) => updateJob(j._id, { filename: e.target.value })}
+                                list="devices-list"
+                                placeholder="/dev/nvme0n1 or /path/to/file"
+                                onFocus={() => collapseAllExcept(j._id)}
+                              />
+                              <datalist id="devices-list">
+                                {options.devices.map((d) => <option key={d} value={d} />)}
+                              </datalist>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">IO Engine (override)</Label>
+                              <Select 
+                                value={j.ioengine ?? '__global__'} 
+                                onValueChange={(v) => updateJob(j._id, { ioengine: v === '__global__' ? undefined : v })}
+                              >
+                                <SelectTrigger className="h-9">
+                                  <SelectValue placeholder={`Use global (${global.ioengine})`} />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__global__">Use global ({global.ioengine})</SelectItem>
+                                  {options.io_engines.map((e) => (
+                                    <SelectItem key={e} value={e}>{e}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Runtime (override, sec)</Label>
+                              <Input
+                                className="h-9"
+                                type="number"
+                                min={0}
+                                value={j.runtime ?? ''}
+                                onChange={(e) => updateJob(j._id, { runtime: e.target.value === '' ? undefined : Number(e.target.value) || undefined })}
+                                placeholder={`Global: ${global.runtime}s`}
+                              />
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">RW</Label>
                             <Select value={j.rw} onValueChange={(v) => updateJob(j._id, { rw: v })}>
                               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                               <SelectContent>
@@ -578,18 +629,19 @@ export default function App() {
                             </div>
                           )}
 
-                          <div className="space-y-1.5">
-                            <Label className="text-xs">Rate (optional)</Label>
-                            <Input
-                              className="h-9"
-                              value={j.rate ?? ''}
-                              onChange={(e) => updateJob(j._id, { rate: e.target.value })}
-                              placeholder="1m, 500k"
-                            />
+                            <div className="space-y-1.5">
+                              <Label className="text-xs">Rate (optional)</Label>
+                              <Input
+                                className="h-9"
+                                value={j.rate ?? ''}
+                                onChange={(e) => updateJob(j._id, { rate: e.target.value })}
+                                placeholder="1m, 500k"
+                              />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>

@@ -25,6 +25,9 @@ export interface JobConfig {
   iodepth: number
   rwmixread: number
   rate?: string
+  stonewallAfter?: boolean // If true, insert stonewall after this job
+  runtime?: number // Override global runtime for this job
+  ioengine?: string // Override global ioengine for this job
 }
 
 export interface FioConfig {

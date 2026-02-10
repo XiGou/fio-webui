@@ -37,15 +37,18 @@ type GlobalConfig struct {
 }
 
 type JobConfig struct {
-	Name      string `json:"name"`
-	Filename  string `json:"filename"`
-	RW        RWType `json:"rw"`
-	BS        string `json:"bs"`
-	Size      string `json:"size"`
-	NumJobs   int    `json:"numjobs"`
-	IODepth   int    `json:"iodepth"`
-	RWMixRead int    `json:"rwmixread"`
-	Rate      string `json:"rate,omitempty"`
+	Name          string `json:"name"`
+	Filename      string `json:"filename"`
+	RW            RWType `json:"rw"`
+	BS            string `json:"bs"`
+	Size          string `json:"size"`
+	NumJobs       int    `json:"numjobs"`
+	IODepth       int    `json:"iodepth"`
+	RWMixRead     int    `json:"rwmixread"`
+	Rate          string `json:"rate,omitempty"`
+	StonewallAfter bool  `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
+	Runtime       int    `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
+	IOEngine      string `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
 }
 
 type FioConfig struct {
@@ -81,12 +84,8 @@ func DefaultJobConfig() JobConfig {
 }
 
 // ToINI generates a jobfile for a single job (one fio command per job)
+// If jobIndex is -1, generates a jobfile with all jobs and stonewall directives
 func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
-	if jobIndex < 0 || jobIndex >= len(c.Jobs) {
-		return ""
-	}
-	job := c.Jobs[jobIndex]
-
 	var sb strings.Builder
 
 	sb.WriteString("[global]\n")
@@ -117,8 +116,53 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 		sb.WriteString("per_job_logs=0\n")
 	}
 
+	// If jobIndex is -1, generate all jobs with stonewall
+	if jobIndex == -1 {
+		for i, job := range c.Jobs {
+			if i > 0 {
+				// Check if previous job had stonewallAfter set
+				if c.Jobs[i-1].StonewallAfter {
+					sb.WriteString("stonewall\n")
+				}
+			}
+			sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
+			// Job-level overrides for runtime and ioengine
+			if job.IOEngine != "" {
+				sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
+			}
+			if job.Runtime > 0 {
+				sb.WriteString(fmt.Sprintf("runtime=%d\n", job.Runtime))
+			}
+			sb.WriteString(fmt.Sprintf("filename=%s\n", job.Filename))
+			sb.WriteString(fmt.Sprintf("rw=%s\n", job.RW))
+			sb.WriteString(fmt.Sprintf("bs=%s\n", job.BS))
+			sb.WriteString(fmt.Sprintf("size=%s\n", job.Size))
+			sb.WriteString(fmt.Sprintf("numjobs=%d\n", job.NumJobs))
+			sb.WriteString(fmt.Sprintf("iodepth=%d\n", job.IODepth))
+			if job.RW == RWRandRW || job.RW == RWReadWrite || job.RW == "rw" {
+				sb.WriteString(fmt.Sprintf("rwmixread=%d\n", job.RWMixRead))
+			}
+			if job.Rate != "" {
+				sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
+			}
+		}
+		return sb.String()
+	}
+
 	// Single job - no stonewall needed, each job is a separate fio command
+	if jobIndex < 0 || jobIndex >= len(c.Jobs) {
+		return ""
+	}
+	job := c.Jobs[jobIndex]
+
 	sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
+	// Job-level overrides for runtime and ioengine
+	if job.IOEngine != "" {
+		sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
+	}
+	if job.Runtime > 0 {
+		sb.WriteString(fmt.Sprintf("runtime=%d\n", job.Runtime))
+	}
 	sb.WriteString(fmt.Sprintf("filename=%s\n", job.Filename))
 	sb.WriteString(fmt.Sprintf("rw=%s\n", job.RW))
 	sb.WriteString(fmt.Sprintf("bs=%s\n", job.BS))

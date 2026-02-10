@@ -99,24 +99,52 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	runID := fmt.Sprintf("run_%d", time.Now().Unix())
 	logPrefix := filepath.Join(e.WorkDir, runID)
 
-	// Generate one jobfile per job (each job is a separate fio command)
-	jobFiles := make([]string, len(config.Jobs))
-	for i := range config.Jobs {
-		jobFile := filepath.Join(e.WorkDir, fmt.Sprintf("%s_job%d.fio", runID, i))
-		jobContent := config.ToINI(logPrefix, i)
+	// Check if any job has stonewallAfter set
+	hasStonewall := false
+	for _, job := range config.Jobs {
+		if job.StonewallAfter {
+			hasStonewall = true
+			break
+		}
+	}
+
+	var jobFiles []string
+	if hasStonewall {
+		// Generate a single jobfile with all jobs and stonewall directives
+		jobFile := filepath.Join(e.WorkDir, fmt.Sprintf("%s.fio", runID))
+		jobContent := config.ToINI(logPrefix, -1)
 		if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
 			e.mu.Unlock()
-			return nil, fmt.Errorf("failed to write job file for job %d: %w", i, err)
+			return nil, fmt.Errorf("failed to write job file: %w", err)
 		}
-		jobFiles[i] = jobFile
+		jobFiles = []string{jobFile}
 		if Debug {
-			log.Printf("[DEBUG] Generated FIO config for job %d (%s):\n%s\n", i, config.Jobs[i].Name, jobContent)
+			log.Printf("[DEBUG] Generated FIO config with stonewall:\n%s\n", jobContent)
+		}
+	} else {
+		// Generate one jobfile per job (each job is a separate fio command)
+		jobFiles = make([]string, len(config.Jobs))
+		for i := range config.Jobs {
+			jobFile := filepath.Join(e.WorkDir, fmt.Sprintf("%s_job%d.fio", runID, i))
+			jobContent := config.ToINI(logPrefix, i)
+			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
+				e.mu.Unlock()
+				return nil, fmt.Errorf("failed to write job file for job %d: %w", i, err)
+			}
+			jobFiles[i] = jobFile
+			if Debug {
+				log.Printf("[DEBUG] Generated FIO config for job %d (%s):\n%s\n", i, config.Jobs[i].Name, jobContent)
+			}
 		}
 	}
 
 	if Debug {
 		log.Printf("[DEBUG] Log prefix: %s\n", logPrefix)
-		log.Printf("[DEBUG] Jobs: %d, execution mode: %s\n", len(config.Jobs), map[bool]string{true: "sequential", false: "parallel"}[config.Sequential])
+		if hasStonewall {
+			log.Printf("[DEBUG] Jobs: %d, using stonewall in single jobfile\n", len(config.Jobs))
+		} else {
+			log.Printf("[DEBUG] Jobs: %d, execution mode: %s\n", len(config.Jobs), map[bool]string{true: "sequential", false: "parallel"}[config.Sequential])
+		}
 	}
 
 	e.state = &RunState{
@@ -131,7 +159,10 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	e.cancel = cancel
 	e.mu.Unlock()
 
-	if config.Sequential {
+	if hasStonewall {
+		// Single jobfile with stonewall - run once
+		go e.runFio(ctx, config, jobFiles[0], runID, logPrefix, 0)
+	} else if config.Sequential {
 		go e.runFioSequential(ctx, config, jobFiles, runID, logPrefix)
 	} else {
 		go e.runFioParallel(ctx, config, jobFiles, runID, logPrefix)
