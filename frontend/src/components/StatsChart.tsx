@@ -44,7 +44,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     }
 
     // Prepare uplot data format: [times, ...series]
-    // fio status "time" can be elapsed ms or Unix s; uPlot needs strictly increasing x. Use linear scale.
+    // fio status "time" can be elapsed ms or Unix s; use first point as t=0 (relative seconds)
     const rawTimes = data.map((d) => d.time)
     const anyLarge = rawTimes.some((t) => t >= 1e9)
     const toSeconds = (t: number) => (anyLarge ? t : t / 1000)
@@ -56,6 +56,9 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
       else last = t
       return last
     })
+    // Relative time: first point = 0s
+    const t0 = times[0]
+    times = times.map((t) => t - t0)
 
     let series: uPlot.Series[] = []
     let values: number[][] = []
@@ -100,22 +103,46 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     const plotData: uPlot.AlignedData = [times, ...values]
 
     const safeWidth = Math.max(1, width)
+    const maxX = times[times.length - 1] ?? 1
+
+    // Dynamic x-axis tick step: avoid crowding, aim for ~6-12 ticks
+    const genXTicks = (): uPlot.Axis.Values => {
+      return (_u: uPlot, _axisIdx: number, scaleMin: number, scaleMax: number) => {
+        const range = scaleMax - scaleMin
+        if (range <= 0) return [scaleMin]
+        const approxCount = 8
+        let step = range / approxCount
+        const mag = Math.pow(10, Math.floor(Math.log10(step)))
+        const norm = step / mag
+        if (norm <= 1) step = mag
+        else if (norm <= 2) step = 2 * mag
+        else if (norm <= 5) step = 5 * mag
+        else step = 10 * mag
+        if (step < 0.1) step = 0.1
+        const ticks: number[] = []
+        let t = Math.floor(scaleMin / step) * step
+        while (t <= scaleMax + 1e-9) {
+          ticks.push(t)
+          t += step
+        }
+        return ticks
+      }
+    }
+
     const opts: uPlot.Options = {
       title,
       width: safeWidth,
       height,
       series: [
-        {
-          // x-axis (time)
-          label: 'Time',
-        },
+        { label: 'Time (s)' },
         ...series,
       ],
       axes: [
         {
-          label: 'Time (s)',
+          label: 'Elapsed (s)',
           stroke: '#666',
           grid: { show: true, stroke: '#e5e7eb', width: 1 },
+          values: genXTicks(),
         },
         {
           label: type === 'iops' ? 'IOPS' : type === 'bw' ? 'MB/s' : 'ms',
@@ -128,7 +155,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
       },
       legend: {
         show: true,
-        live: false,
+        live: true,
       },
       cursor: {
         show: true,
@@ -141,9 +168,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
       // Update existing plot in-place for real-time updates (no destroy/recreate)
       plotRef.current.setData(plotData, false)
       plotRef.current.setSize({ width: safeWidth, height })
-      const minX = Math.min(...times)
-      const maxX = Math.max(...times)
-      plotRef.current.setScale('x', { min: minX, max: maxX })
+      plotRef.current.setScale('x', { min: 0, max: maxX })
     } else {
       // Create new plot
       plotRef.current = new uPlot(opts, plotData, chartRef.current)
