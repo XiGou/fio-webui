@@ -85,15 +85,15 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     } else if (type === 'lat') {
       series = [
         { label: 'Mean (ms)', stroke: '#2563eb', width: 2 },
-        { label: 'P50 (ms)', stroke: '#10b981', width: 2 },
         { label: 'P95 (ms)', stroke: '#f59e0b', width: 2 },
         { label: 'P99 (ms)', stroke: '#ef4444', width: 2 },
+        { label: 'Max (ms)', stroke: '#8b5cf6', width: 2 },
       ]
       values = [
         data.map((d) => d.latMean),
-        data.map((d) => d.latP50),
         data.map((d) => d.latP95),
         data.map((d) => d.latP99),
+        data.map((d) => d.latMax),
       ]
     }
 

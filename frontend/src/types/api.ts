@@ -125,7 +125,7 @@ export interface StatsDataPoint {
   bwRead: number // MB/s
   bwWrite: number // MB/s
   latMean: number // ms
-  latP50: number // ms
   latP95: number // ms
   latP99: number // ms
+  latMax: number // ms
 }

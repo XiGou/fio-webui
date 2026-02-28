@@ -236,9 +236,9 @@ export default function App() {
       bwRead: num(r.bwRead),
       bwWrite: num(r.bwWrite),
       latMean: num(r.latMean),
-      latP50: num(r.latP50),
       latP95: num(r.latP95),
       latP99: num(r.latP99),
+      latMax: num(r.latMax),
     }
   }, [])
 

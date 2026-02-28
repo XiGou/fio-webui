@@ -30,9 +30,9 @@ type StatsDataPoint struct {
 	BWRead    float64 `json:"bwRead"`  // MB/s
 	BWWrite   float64 `json:"bwWrite"` // MB/s
 	LatMean   float64 `json:"latMean"` // ms
-	LatP50    float64 `json:"latP50"`  // ms
 	LatP95    float64 `json:"latP95"`  // ms
 	LatP99    float64 `json:"latP99"`  // ms
+	LatMax    float64 `json:"latMax"`  // ms
 }
 
 // StatusToStatsDataPoint aggregates a StatusUpdate into a single StatsDataPoint.
@@ -48,9 +48,9 @@ func StatusToStatsDataPoint(status *StatusUpdate) *StatsDataPoint {
 
 	type latAgg struct {
 		mean float64
-		p50  float64
 		p95  float64
 		p99  float64
+		max  float64
 	}
 	var latencies []latAgg
 
@@ -78,44 +78,49 @@ func StatusToStatsDataPoint(status *StatusUpdate) *StatsDataPoint {
 		}
 
 		if len(latNs) > 0 {
-			var mean, p50, p95, p99 float64
+			var mean, p95, p99, max float64
 			for _, lat := range latNs {
 				// Convert ns to ms
 				valueMs := float64(lat.Value) / 1_000_000.0
 				switch lat.Percentile {
-				case 50:
-					p50 = valueMs
 				case 95:
 					p95 = valueMs
 				case 99:
 					p99 = valueMs
+				case 100:
+					max = valueMs
 				}
-				// Estimate mean from available percentiles (use <= p50 as proxy)
+				// Estimate mean from available percentiles (use <= 50 as proxy)
 				if lat.Percentile <= 50 {
 					mean = valueMs
+				}
+				// Max: use p100 if present, else track highest value seen
+				if valueMs > max {
+					max = valueMs
 				}
 			}
 			latencies = append(latencies, latAgg{
 				mean: mean,
-				p50:  p50,
 				p95:  p95,
 				p99:  p99,
+				max:  max,
 			})
 		}
 	}
 
-	// Average latencies across jobs
-	var latMean, latP50, latP95, latP99 float64
+	// Average latencies across jobs (use max of max for aggregate)
+	var latMean, latP95, latP99, latMax float64
 	if len(latencies) > 0 {
 		for _, l := range latencies {
 			latMean += l.mean
-			latP50 += l.p50
 			latP95 += l.p95
 			latP99 += l.p99
+			if l.max > latMax {
+				latMax = l.max
+			}
 		}
 		n := float64(len(latencies))
 		latMean /= n
-		latP50 /= n
 		latP95 /= n
 		latP99 /= n
 	}
@@ -129,8 +134,8 @@ func StatusToStatsDataPoint(status *StatusUpdate) *StatsDataPoint {
 		BWRead:    totalBWRead / (1024.0 * 1024.0),
 		BWWrite:   totalBWWrite / (1024.0 * 1024.0),
 		LatMean:   latMean,
-		LatP50:    latP50,
 		LatP95:    latP95,
 		LatP99:    latP99,
+		LatMax:    latMax,
 	}
 }
