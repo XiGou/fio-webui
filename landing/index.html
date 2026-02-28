@@ -1,19 +1,23 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FIO WebUI - 磁盘性能测试 Web 界面</title>
+  <title>FIO WebUI - Web interface for disk I/O performance testing</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="page">
+    <div class="bg-glow"></div>
+
     <header class="header">
       <div class="header-inner">
-        <span class="logo">FIO WebUI</span>
+        <span class="logo">
+          <span class="logo-icon">◆</span> FIO WebUI
+        </span>
         <nav class="nav">
           <a href="https://github.com/XiGou/fio-webui">GitHub</a>
           <a href="https://github.com/XiGou/fio-webui/releases">Releases</a>
@@ -23,59 +27,68 @@
 
     <main>
       <section class="hero">
-        <h1>磁盘性能测试，<br>从未如此简单</h1>
-        <p class="hero-desc">通过 Web 界面配置 fio、实时监控 IOPS/带宽/延迟，单二进制即可部署。</p>
+        <div class="hero-badge">Open source · Single binary</div>
+        <h1>Disk I/O testing,<br><span class="gradient-text">never been simpler</span></h1>
+        <p class="hero-desc">Configure fio via Web UI, monitor IOPS / bandwidth / latency in real time. Deploy with a single binary.</p>
         <div class="hero-badges">
-          <span class="badge">Build</span>
-          <span class="badge">Release</span>
-          <span class="badge">MIT</span>
+          <span class="badge">✓ Build</span>
+          <span class="badge">✓ Release</span>
+          <span class="badge">✓ MIT</span>
         </div>
         <div class="hero-cta">
-          <a href="https://github.com/XiGou/fio-webui/releases" class="btn btn-primary">下载 Release</a>
-          <a href="https://github.com/XiGou/fio-webui" class="btn btn-secondary">查看源码</a>
+          <a href="https://github.com/XiGou/fio-webui/releases" class="btn btn-primary">Download Release</a>
+          <a href="https://github.com/XiGou/fio-webui" class="btn btn-secondary">View Source</a>
         </div>
       </section>
 
       <section class="features">
-        <h2>功能特性</h2>
+        <h2>Features</h2>
         <div class="feature-grid">
           <div class="feature-card">
-            <div class="feature-icon">⚙️</div>
-            <h3>可视化配置</h3>
-            <p>图形界面配置 fio 参数，无需手写 job 文件</p>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            </div>
+            <h3>Visual configuration</h3>
+            <p>Configure fio parameters in a graphical UI—no hand-written job files</p>
           </div>
           <div class="feature-card">
-            <div class="feature-icon">📊</div>
-            <h3>实时监控</h3>
-            <p>WebSocket 推送 IOPS、带宽、延迟曲线</p>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+            </div>
+            <h3>Real-time monitoring</h3>
+            <p>WebSocket-pushed IOPS, bandwidth, and latency charts</p>
           </div>
           <div class="feature-card">
-            <div class="feature-icon">🔄</div>
-            <h3>多引擎支持</h3>
-            <p>libaio、io_uring、sync、posixaio 等</p>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+            </div>
+            <h3>Multiple engines</h3>
+            <p>libaio, io_uring, sync, posixaio, and more</p>
           </div>
           <div class="feature-card">
-            <div class="feature-icon">📁</div>
-            <h3>历史记录</h3>
-            <p>运行记录、参数复用、日志摘要</p>
+            <div class="feature-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+            </div>
+            <h3>Run history</h3>
+            <p>Run records, parameter reuse, log summaries</p>
           </div>
         </div>
       </section>
 
       <section class="quick-start">
-        <h2>快速开始</h2>
+        <h2>Quick start</h2>
         <div class="code-block">
-          <div class="code-header">终端</div>
-          <pre><code><span class="comment"># 下载 release 后运行（需已安装 fio）</span>
+          <div class="code-header">Terminal</div>
+          <pre><code><span class="comment"># Run after downloading release (requires fio installed)</span>
 ./fio-webui
 
-<span class="comment"># 访问 http://localhost:8080</span></code></pre>
+<span class="comment"># Visit http://localhost:8080</span></code></pre>
         </div>
       </section>
 
       <section class="footer-cta">
-        <p>开源免费 · Go + React · 跨平台</p>
-        <a href="https://github.com/XiGou/fio-webui" class="btn btn-primary">前往 GitHub</a>
+        <p>Open source · Go + React · Cross-platform</p>
+        <a href="https://github.com/XiGou/fio-webui" class="btn btn-primary">View on GitHub</a>
       </section>
     </main>
 

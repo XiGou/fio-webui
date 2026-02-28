@@ -1,7 +1,7 @@
 # FIO WebUI - 开发与构建
 # 使用 make 或 make help 查看目标
 
-.PHONY: help dev dev-backend dev-frontend install-air build run clean
+.PHONY: help dev dev-backend dev-frontend install-air test build ci run clean
 
 help:
 	@echo "FIO WebUI Makefile"
@@ -14,8 +14,10 @@ help:
 	@echo "  工具"
 	@echo "    make install-air   - 安装 air（Go 热加载）"
 	@echo ""
-	@echo "  构建与运行"
+	@echo "  测试与构建"
+	@echo "    make test         - 运行 Go 单测（-race，与 CI 一致）"
 	@echo "    make build        - 构建前端并编译 Go 二进制"
+	@echo "    make ci           - 完整 CI 流程：test + build"
 	@echo "    make run          - 运行已构建的二进制（默认 :8080）"
 	@echo "    make clean        - 清理构建产物与 Air 临时目录"
 
@@ -36,10 +38,17 @@ install-air:
 	@go install github.com/air-verse/air@latest
 	@echo "air 已安装，可直接运行: make dev-backend 或 make dev"
 
+# 运行 Go 单测（-race，与 GitHub Actions CI 一致）
+test:
+	@CGO_ENABLED=1 go test -v -race -short ./...
+
 # 构建：先构建前端，再编译 Go（嵌入 web/dist）
 build:
 	@cd frontend && npm install && npm run build && cd ..
 	@go build -o fio-webui .
+
+# 完整 CI 流程：test + build
+ci: test build
 
 # 运行已构建的二进制
 run:

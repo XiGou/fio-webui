@@ -8,99 +8,99 @@
 <h1 align="center">FIO WebUI</h1>
 
 <p align="center">
-  <strong>磁盘性能测试的 Web 界面</strong> · Go 后端 · React 前端 · 单二进制部署
+  <strong>Web interface for disk I/O performance testing</strong> · Go backend · React frontend · Single binary deployment
 </p>
 
 <p align="center">
-  <a href="https://xigou.github.io/fio-webui/">🌐 落地页</a> ·
-  <a href="#功能">功能</a> ·
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#安装">安装</a> ·
-  <a href="#开发">开发</a>
+  <a href="https://xigou.github.io/fio-webui/">🌐 Landing Page</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#development">Development</a>
 </p>
 
 ---
 
-## 功能
+## Features
 
-| 特性 | 描述 |
-|------|------|
-| **可视化配置** | 通过 Web 界面配置 fio 测试参数，无需手写 job 文件 |
-| **多引擎支持** | libaio、io_uring、sync、posixaio 等 IO 引擎 |
-| **多模式** | read、write、randread、randwrite、randrw、readwrite |
-| **实时监控** | WebSocket 推送 IOPS、带宽、延迟曲线 |
-| **历史记录** | 运行记录、参数复用、日志摘要 |
-| **单二进制** | 前端嵌入，无需独立部署 |
+| Feature | Description |
+|---------|-------------|
+| **Visual configuration** | Configure fio test parameters via Web UI—no need to hand-write job files |
+| **Multiple engines** | libaio, io_uring, sync, posixaio, and more I/O engines |
+| **Multiple modes** | read, write, randread, randwrite, randrw, readwrite |
+| **Real-time monitoring** | WebSocket-pushed IOPS, bandwidth, and latency charts |
+| **History** | Run history, parameter reuse, log summaries |
+| **Single binary** | Frontend embedded—no separate deployment |
 
 ---
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 下载最新 release（Linux / macOS / Windows）
+# Download latest release (Linux / macOS / Windows)
 # https://github.com/XiGou/fio-webui/releases
 
-# 运行（需已安装 fio）
+# Run (requires fio to be installed)
 ./fio-webui
-# 访问 http://localhost:8080
+# Visit http://localhost:8080
 ```
 
 ---
 
-## 安装
+## Installation
 
-### 前置依赖
+### Prerequisites
 
-- [fio](https://github.com/axboe/fio)（需预先安装）
-- Go 1.26+（仅从源码构建时）
-- Node.js LTS（仅构建前端时需要）
+- [fio](https://github.com/axboe/fio) (must be installed)
+- Go 1.26+ (only when building from source)
+- Node.js LTS (only when building frontend)
 
-### 从源码构建
+### Build from source
 
 ```bash
-# 前端 + 后端
+# Frontend + backend
 make build
 ./fio-webui
 
-# 或手动
+# Or manually
 cd frontend && npm install && npm run build && cd ..
 CGO_ENABLED=0 go build -o fio-webui .
 ```
 
-### 运行参数
+### Run flags
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `-addr` | `:8080` | HTTP 监听地址 |
-| `-data` | `./data` | 运行历史数据目录 |
-| `-debug` | `false` | 开启调试日志 |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-addr` | `:8080` | HTTP listen address |
+| `-data` | `./data` | Run history data directory |
+| `-debug` | `false` | Enable debug logging |
 
 ---
 
-## 开发
+## Development
 
 ```bash
-make install-air   # 安装热加载工具（仅需一次）
-make dev           # 后端(air) + 前端(Vite)，Ctrl+C 退出
+make install-air   # Install hot-reload tool (once)
+make dev           # Backend (air) + frontend (Vite), Ctrl+C to exit
 ```
 
-单独运行：
+Run separately:
 
-- 后端：`make dev-backend`
-- 前端：`make dev-frontend`
+- Backend: `make dev-backend`
+- Frontend: `make dev-frontend`
 
 ---
 
-## 架构
+## Architecture
 
 ```
 fio-webui/
-├── main.go              # 入口，嵌入 web/dist
+├── main.go              # Entry, embeds web/dist
 ├── internal/
-│   ├── fio/             # fio 执行、解析、存储
+│   ├── fio/             # fio execution, parsing, storage
 │   └── server/          # HTTP / WebSocket / API
 ├── frontend/            # React + Vite + shadcn/ui
-└── web/dist/            # 前端构建产物（嵌入二进制）
+└── web/dist/            # Frontend build output (embedded in binary)
 ```
 
 ---
