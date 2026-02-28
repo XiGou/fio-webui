@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, Routes, Route } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -13,6 +14,9 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { ansiToHtml } from '@/lib/ansi'
 import { StatsChart } from '@/components/StatsChart'
+import { Layout } from '@/components/Layout'
+import { PresetsPage } from '@/pages/PresetsPage'
+import type { PresetWorkload } from '@/data/presets'
 import type {
   DefaultsResponse,
   FioConfig,
@@ -21,7 +25,6 @@ import type {
   JobConfig,
   OptionsResponse,
   RunState,
-  StatusUpdate,
   StatsDataPoint,
   TaskValidationResponse,
   WsMessage,
@@ -82,6 +85,18 @@ function newTaskDraft(base?: Partial<FioTask>): TaskDraft {
     },
     jobs: base?.jobs?.map((j) => ({ ...j })) || [newJobDraft({ name: 'job1' })],
   }
+}
+
+function presetToTaskDraft(preset: PresetWorkload): TaskDraft {
+  const task = preset.task
+  const jobs: JobDraft[] = task.jobs.map((j, i) => {
+    const draft = newJobDraft(j) as JobDraft
+    if (preset.stonewallBetweenJobs && i < task.jobs.length - 1) {
+      draft._stonewallAfter = true
+    }
+    return draft
+  })
+  return newTaskDraft({ ...task, jobs })
 }
 
 function buildTaskList(tasks: TaskDraft[]): FioTaskList {
@@ -341,6 +356,22 @@ export default function App() {
     }
   }, [outputLines, logPanelOpen])
 
+  const location = useLocation()
+  const navigate = useNavigate()
+
+  // Apply preset when navigating from Presets page with state.preset
+  useEffect(() => {
+    const preset = location.state?.preset as PresetWorkload | undefined
+    if (preset) {
+      const draft = presetToTaskDraft(preset)
+      setTasks((prev) => {
+        const collapsedPrev = prev.map((t) => ({ ...t, _collapsed: true }))
+        return [...collapsedPrev, draft]
+      })
+      navigate('/', { replace: true, state: {} })
+    }
+  }, [location.state, navigate])
+
   const run = state?.status === 'running'
   const start = async () => {
     const taskList = buildTaskList(tasks)
@@ -597,9 +628,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="container mx-auto max-w-7xl space-y-5 p-6">
-      <header className="flex items-center justify-between border-b border-border pb-4">
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={
+            <div className="space-y-5">
+              <header className="flex items-center justify-between border-b border-border pb-4">
         <div className="space-y-0.5">
           <h1 className="text-xl font-semibold text-foreground">FIO WebUI</h1>
           <p className="text-xs text-muted-foreground">
@@ -1031,7 +1064,6 @@ export default function App() {
             </div>
           </CardContent>
         </Card>
-      </div>
 
       {/* Floating log button */}
       <button
@@ -1160,6 +1192,11 @@ export default function App() {
           </div>
         </>
       )}
-    </div>
+            </div>
+          }
+        />
+        <Route path="presets" element={<PresetsPage />} />
+      </Route>
+    </Routes>
   )
 }
