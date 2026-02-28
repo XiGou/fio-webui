@@ -44,11 +44,8 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     }
 
     // Prepare uplot data format: [times, ...series]
-    // fio status "time" can be elapsed ms or Unix s; use first point as t=0 (relative seconds)
-    const rawTimes = data.map((d) => d.time)
-    const anyLarge = rawTimes.some((t) => t >= 1e9)
-    const toSeconds = (t: number) => (anyLarge ? t : t / 1000)
-    let times = rawTimes.map(toSeconds)
+    // Backend normalizes time to seconds; use first point as t=0 (relative seconds)
+    let times = data.map((d) => d.time)
     // Ensure strictly increasing (uPlot requirement)
     let last = -Infinity
     times = times.map((t) => {
@@ -105,29 +102,11 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     const safeWidth = Math.max(1, width)
     const maxX = times[times.length - 1] ?? 1
 
-    // Dynamic x-axis tick step: avoid crowding, aim for ~6-12 ticks
-    const genXTicks = (): uPlot.Axis.Values => {
-      return (_u: uPlot, _axisIdx: number, scaleMin: number, scaleMax: number) => {
-        const range = scaleMax - scaleMin
-        if (range <= 0) return [scaleMin]
-        const approxCount = 8
-        let step = range / approxCount
-        const mag = Math.pow(10, Math.floor(Math.log10(step)))
-        const norm = step / mag
-        if (norm <= 1) step = mag
-        else if (norm <= 2) step = 2 * mag
-        else if (norm <= 5) step = 5 * mag
-        else step = 10 * mag
-        if (step < 0.1) step = 0.1
-        const ticks: number[] = []
-        let t = Math.floor(scaleMin / step) * step
-        while (t <= scaleMax + 1e-9) {
-          ticks.push(t)
-          t += step
-        }
-        return ticks
-      }
-    }
+    // Latency y-scale: ensure visible range when all zeros
+    const yRangeLat: uPlot.Range.Function | undefined =
+      type === 'lat'
+        ? (_u, _initMin, initMax) => [0, Math.max(1, initMax)] as uPlot.Range.MinMax
+        : undefined
 
     const opts: uPlot.Options = {
       title,
@@ -142,7 +121,6 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
           label: 'Elapsed (s)',
           stroke: '#666',
           grid: { show: true, stroke: '#e5e7eb', width: 1 },
-          values: genXTicks(),
         },
         {
           label: type === 'iops' ? 'IOPS' : type === 'bw' ? 'MB/s' : 'ms',
@@ -152,6 +130,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
       ],
       scales: {
         x: { min: 0, time: false },
+        ...(type === 'lat' && yRangeLat ? { y: { range: yRangeLat } } : {}),
       },
       legend: {
         show: true,

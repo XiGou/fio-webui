@@ -10,11 +10,21 @@ import (
 	"sync"
 )
 
-// StatusUpdate represents the status JSON structure from fio's --status-interval output
+// StatusUpdate represents the status JSON structure from fio's --status-interval output.
+// Time is normalized to seconds. fio may output "time", "timestamp" (seconds), or "timestamp_ms" (ms).
+// We unmarshal via fioStatusUpdateRaw and convert.
 type StatusUpdate struct {
 	Time   int64                  `json:"time"`
 	Jobs   []JobStatus            `json:"jobs"`
 	Errors map[string]interface{} `json:"errors,omitempty"`
+}
+
+// fioStatusUpdateRaw parses fio JSON which may have "time", "timestamp", or "timestamp_ms"
+type fioStatusUpdateRaw struct {
+	Time        int64       `json:"time"`
+	Timestamp   int64       `json:"timestamp"`
+	TimestampMs int64       `json:"timestamp_ms"`
+	Jobs        []JobStatus `json:"jobs"`
 }
 
 // JobStatus represents a single job's status in the status update
@@ -31,6 +41,12 @@ type JobStatus struct {
 }
 
 // IOStats represents read/write/trim statistics
+// FioClatNs is fio's clat_ns format: object with mean and percentile map
+type FioClatNs struct {
+	Mean       float64           `json:"mean"`
+	Percentile map[string]uint64 `json:"percentile"` // "50.000000" -> value in ns
+}
+
 type IOStats struct {
 	IOPS      float64    `json:"iops"`
 	BW        int64      `json:"bw"`       // bytes/sec
@@ -38,6 +54,7 @@ type IOStats struct {
 	IOStats   []Stat     `json:"iostats"`
 	LatencyNs []Latency  `json:"latency_ns"`
 	LatencyUs []Latency  `json:"latency_us"`
+	ClatNs    *FioClatNs `json:"clat_ns"` // fio status format
 }
 
 // Latency represents a single latency measurement with percentile
@@ -171,22 +188,21 @@ func (p *StreamJSONParser) parse() {
 		}
 
 		// Try to parse current line as complete JSON first
-		var status StatusUpdate
-		if err := json.Unmarshal([]byte(trimmedLine), &status); err == nil {
-			if status.Time > 0 && len(status.Jobs) > 0 {
-				p.handleStatusUpdate(lineCount, trimmedLine, &status)
+		var raw fioStatusUpdateRaw
+		if err := json.Unmarshal([]byte(trimmedLine), &raw); err == nil && len(raw.Jobs) > 0 {
+			status := rawToStatusUpdate(&raw)
+			if status != nil {
+				p.handleStatusUpdate(lineCount, trimmedLine, status)
 				continue
 			}
-			// Time/Jobs empty: try fio single-job format (job_start, read, write at top level)
-			var single fioSingleJobLine
-			if err2 := json.Unmarshal([]byte(trimmedLine), &single); err2 == nil && single.JobStart > 0 {
-				if converted := singleJobToStatusUpdate(&single); converted != nil {
-					p.handleStatusUpdate(lineCount, trimmedLine, converted)
-					continue
-				}
+		}
+		// Time/Jobs empty: try fio single-job format (job_start, read, write at top level)
+		var single fioSingleJobLine
+		if err := json.Unmarshal([]byte(trimmedLine), &single); err == nil && single.JobStart > 0 {
+			if converted := singleJobToStatusUpdate(&single); converted != nil {
+				p.handleStatusUpdate(lineCount, trimmedLine, converted)
+				continue
 			}
-			p.handleStatusUpdate(lineCount, trimmedLine, &status)
-			continue
 		}
 
 		// Not valid JSON on its own, might be part of multi-line JSON or regular output
@@ -216,26 +232,24 @@ func (p *StreamJSONParser) parse() {
 
 			// Only try parse when line ends with '}' (possible end of top-level object)
 			if strings.HasSuffix(trimmedLine, "}") {
-				if err := json.Unmarshal([]byte(jsonBuffer), &status); err == nil {
+				var raw fioStatusUpdateRaw
+				if err := json.Unmarshal([]byte(jsonBuffer), &raw); err == nil && len(raw.Jobs) > 0 {
 					if Debug {
 						log.Printf("[DEBUG] StreamJSONParser: Line %d - Completed multi-line JSON", lineCount)
 					}
-					if status.Time > 0 && len(status.Jobs) > 0 {
-						p.handleStatusUpdate(lineCount, jsonBuffer, &status)
-					} else {
-						var single fioSingleJobLine
-						if err2 := json.Unmarshal([]byte(jsonBuffer), &single); err2 == nil && single.JobStart > 0 {
-							if converted := singleJobToStatusUpdate(&single); converted != nil {
-								p.handleStatusUpdate(lineCount, jsonBuffer, converted)
-							} else {
-								p.handleStatusUpdate(lineCount, jsonBuffer, &status)
-							}
-						} else {
-							p.handleStatusUpdate(lineCount, jsonBuffer, &status)
-						}
+					if status := rawToStatusUpdate(&raw); status != nil {
+						p.handleStatusUpdate(lineCount, jsonBuffer, status)
 					}
 					jsonBuffer = ""
 					continue
+				}
+				var single fioSingleJobLine
+				if err := json.Unmarshal([]byte(jsonBuffer), &single); err == nil && single.JobStart > 0 {
+					if converted := singleJobToStatusUpdate(&single); converted != nil {
+						p.handleStatusUpdate(lineCount, jsonBuffer, converted)
+						jsonBuffer = ""
+						continue
+					}
 				}
 				// Parse failed: might be inner '}' only (e.g. "clat_ns": { ... }). Keep appending.
 				if Debug {
@@ -312,10 +326,47 @@ func (p *StreamJSONParser) GetLastStatus() *StatusUpdate {
 	return p.lastStatus
 }
 
+// normalizeTimeToSeconds converts fio time to seconds.
+// fio outputs: ms (1e3-1e6), usec (1e6-1e10), Unix s (1e9-1e10), or Unix ms (>=1e12).
+func normalizeTimeToSeconds(t int64) int64 {
+	if t <= 0 {
+		return t
+	}
+	if t >= 1e12 {
+		return t / 1000 // Unix ms -> s
+	}
+	if t >= 1e6 && t < 1e9 {
+		return t / 1e6 // usec -> s
+	}
+	if t >= 1000 {
+		return t / 1000 // ms -> s
+	}
+	return t // already seconds
+}
+
+// rawToStatusUpdate converts fioStatusUpdateRaw to StatusUpdate with Time normalized to seconds.
+// fio outputs: "time" (varies), "timestamp" (Unix seconds), "timestamp_ms" (Unix ms).
+func rawToStatusUpdate(raw *fioStatusUpdateRaw) *StatusUpdate {
+	if raw == nil || len(raw.Jobs) == 0 {
+		return nil
+	}
+	var t int64
+	if raw.Time > 0 {
+		t = normalizeTimeToSeconds(raw.Time)
+	} else if raw.Timestamp > 0 {
+		t = raw.Timestamp // already Unix seconds
+	} else if raw.TimestampMs > 0 {
+		t = raw.TimestampMs / 1000
+	} else {
+		return nil
+	}
+	return &StatusUpdate{Time: t, Jobs: raw.Jobs}
+}
+
 // singleJobToStatusUpdate converts fio's single-job JSON line to StatusUpdate so we can emit stats.
-// job_start is in ms (Unix or elapsed); we store Time in seconds for consistency with StatsDataPoint.
+// Use elapsed (seconds since job start) for the x-axis; job_start is fixed per job and wrong for chart.
 func singleJobToStatusUpdate(single *fioSingleJobLine) *StatusUpdate {
-	if single == nil || single.JobStart <= 0 {
+	if single == nil || (single.JobStart <= 0 && single.Elapsed == 0) {
 		return nil
 	}
 	var latNs []Latency
@@ -333,13 +384,26 @@ func singleJobToStatusUpdate(single *fioSingleJobLine) *StatusUpdate {
 		BW:        single.Read.BW * kib,
 		LatencyNs: latNs,
 	}
-	write := IOStats{
-		IOPS: single.Write.IOPS,
-		BW:   single.Write.BW * kib,
+	// Parse Write.ClatNs for write-only jobs
+	var writeLatNs []Latency
+	for k, v := range single.Write.ClatNs.Percentile {
+		pct, err := strconv.ParseFloat(k, 64)
+		if err != nil || pct < 0 || pct > 100 {
+			continue
+		}
+		writeLatNs = append(writeLatNs, Latency{Percentile: uint32(pct), Value: v})
 	}
-	timeSec := single.JobStart / 1000
-	if timeSec <= 0 {
-		timeSec = single.JobStart
+	write := IOStats{
+		IOPS:      single.Write.IOPS,
+		BW:        single.Write.BW * kib,
+		LatencyNs: writeLatNs,
+	}
+	// elapsed_sec is ideal for chart x-axis (0, 1, 2, ...); job_start is fixed and wrong
+	var timeSec int64
+	if single.Elapsed > 0 {
+		timeSec = int64(single.Elapsed)
+	} else {
+		timeSec = normalizeTimeToSeconds(single.JobStart)
 	}
 	return &StatusUpdate{
 		Time: timeSec,
