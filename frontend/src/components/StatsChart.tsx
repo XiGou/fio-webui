@@ -15,17 +15,22 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
   const plotRef = useRef<uPlot | null>(null)
   const [width, setWidth] = useState(800)
 
-  // Update width on resize
+  // Update width when container resizes (e.g. when Status panel opens)
   useEffect(() => {
-    if (!chartRef.current) return
+    const el = chartRef.current
+    if (!el) return
     const updateWidth = () => {
-      if (chartRef.current) {
-        setWidth(chartRef.current.offsetWidth || 800)
-      }
+      const w = el.offsetWidth
+      if (w > 0) setWidth(w)
     }
     updateWidth()
+    const ro = new ResizeObserver(updateWidth)
+    ro.observe(el)
     window.addEventListener('resize', updateWidth)
-    return () => window.removeEventListener('resize', updateWidth)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', updateWidth)
+    }
   }, [])
 
   useEffect(() => {
@@ -39,7 +44,19 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     }
 
     // Prepare uplot data format: [times, ...series]
-    const times = data.map((d) => d.time)
+    // fio status "time" can be elapsed ms or Unix s; uPlot needs strictly increasing x. Use linear scale.
+    const rawTimes = data.map((d) => d.time)
+    const anyLarge = rawTimes.some((t) => t >= 1e9)
+    const toSeconds = (t: number) => (anyLarge ? t : t / 1000)
+    let times = rawTimes.map(toSeconds)
+    // Ensure strictly increasing (uPlot requirement)
+    let last = -Infinity
+    times = times.map((t) => {
+      if (t <= last) last = last + 0.001
+      else last = t
+      return last
+    })
+
     let series: uPlot.Series[] = []
     let values: number[][] = []
 
@@ -82,9 +99,10 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
 
     const plotData: uPlot.AlignedData = [times, ...values]
 
+    const safeWidth = Math.max(1, width)
     const opts: uPlot.Options = {
       title,
-      width,
+      width: safeWidth,
       height,
       series: [
         {
@@ -95,7 +113,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
       ],
       axes: [
         {
-          label: 'Time',
+          label: 'Time (s)',
           stroke: '#666',
           grid: { show: true, stroke: '#e5e7eb', width: 1 },
         },
@@ -106,7 +124,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
         },
       ],
       scales: {
-        x: { time: true },
+        x: { min: 0, time: false },
       },
       legend: {
         show: true,
@@ -120,21 +138,27 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     }
 
     if (plotRef.current) {
-      // Update existing plot
+      // Update existing plot in-place for real-time updates (no destroy/recreate)
       plotRef.current.setData(plotData, false)
-      plotRef.current.setSize({ width, height })
+      plotRef.current.setSize({ width: safeWidth, height })
+      const minX = Math.min(...times)
+      const maxX = Math.max(...times)
+      plotRef.current.setScale('x', { min: minX, max: maxX })
     } else {
       // Create new plot
       plotRef.current = new uPlot(opts, plotData, chartRef.current)
     }
+  }, [data, type, title, width, height])
 
+  // Destroy only on unmount
+  useEffect(() => {
     return () => {
       if (plotRef.current) {
         plotRef.current.destroy()
         plotRef.current = null
       }
     }
-  }, [data, type, title, width, height])
+  }, [])
 
   return (
     <div className="w-full">

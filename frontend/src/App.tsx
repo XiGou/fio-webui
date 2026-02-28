@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -201,9 +201,40 @@ export default function App() {
       })
   }, [])
 
+  const normalizeStatsPoint = useCallback((raw: unknown): StatsDataPoint | null => {
+    if (!raw || typeof raw !== 'object') return null
+    const r = raw as Record<string, unknown>
+    const time = Number(r.time)
+    if (!Number.isFinite(time) || time < 0) return null
+
+    const num = (v: unknown) => {
+      const n = Number(v)
+      return Number.isFinite(n) ? n : 0
+    }
+
+    return {
+      time,
+      iops: num(r.iops),
+      iopsRead: num(r.iopsRead),
+      iopsWrite: num(r.iopsWrite),
+      bw: num(r.bw),
+      bwRead: num(r.bwRead),
+      bwWrite: num(r.bwWrite),
+      latMean: num(r.latMean),
+      latP50: num(r.latP50),
+      latP95: num(r.latP95),
+      latP99: num(r.latP99),
+    }
+  }, [])
+
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/events`
+    const host = window.location.hostname
+    const port = window.location.port
+    // In dev (Vite 5173/5174), connect directly to backend to avoid WS proxy issues
+    const wsPort = port === '5173' || port === '5174' ? '8080' : port
+    const wsHost = port === '5173' || port === '5174' ? `${host}:${wsPort}` : window.location.host
+    const wsUrl = `${protocol}//${wsHost}/api/events`
     let backoff = 1000
     const maxBackoff = 10000
 
@@ -228,11 +259,13 @@ export default function App() {
             }
           }
           if (msg.type === 'stats' && msg.data) {
-            const point = msg.data as StatsDataPoint
+            const point = normalizeStatsPoint(msg.data)
+            if (!point) return
             setStatsData((prev) => {
-              const newData = [...prev, point]
-              // Keep last 1000 data points to avoid memory issues
-              return newData.slice(-1000)
+              const last = prev.length > 0 ? prev[prev.length - 1].time : 0
+              if (point.time < last) return prev
+              const next = [...prev, point]
+              return next.slice(-1000)
             })
           }
         } catch (_) {}
@@ -260,33 +293,47 @@ export default function App() {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
       }
-      if (wsRef.current) {
-        wsRef.current.close()
+      const ws = wsRef.current
+      if (ws) {
         wsRef.current = null
+        // Only close if already open; avoid aborting during CONNECTING (prevents
+        // "WebSocket is closed before the connection is established" on unmount).
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CLOSING) {
+          ws.close()
+        }
       }
       setWsReconnecting(false)
     }
   }, [])
 
-  // Load historical stats for the current run once on first render.
+  // Load historical stats (for current run). Returns data or null.
+  const fetchStatsHistory = useCallback(async (): Promise<StatsDataPoint[] | null> => {
+    try {
+      const res = await fetch('/api/stats')
+      if (!res.ok) return null
+      const data = (await res.json()) as unknown
+      if (!Array.isArray(data) || data.length === 0) return null
+      const normalized = data.map(normalizeStatsPoint).filter(Boolean) as StatsDataPoint[]
+      return normalized.length > 0 ? normalized : null
+    } catch {
+      return null
+    }
+  }, [normalizeStatsPoint])
+
   useEffect(() => {
     let canceled = false
-    ;(async () => {
-      try {
-        const res = await fetch('/api/stats')
-        if (!res.ok) return
-        const data = (await res.json()) as StatsDataPoint[]
-        if (!canceled && Array.isArray(data) && data.length > 0) {
-          setStatsData(data)
-        }
-      } catch {
-        // Best-effort only; realtime WebSocket updates will still work.
-      }
-    })()
-    return () => {
-      canceled = true
+    fetchStatsHistory().then((data) => {
+      if (!canceled && data) setStatsData(data)
+    })
+    return () => { canceled = true }
+  }, [fetchStatsHistory])
+
+  // When opening Status panel, refetch history so we show persisted data immediately.
+  useEffect(() => {
+    if (statsPanelOpen) {
+      fetchStatsHistory().then((data) => data && setStatsData(data))
     }
-  }, [])
+  }, [statsPanelOpen, fetchStatsHistory])
 
   useEffect(() => {
     if (logPanelOpen) {
@@ -1086,13 +1133,16 @@ export default function App() {
                     Latency
                   </button>
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-h-0 flex flex-col">
                   {statsData.length === 0 ? (
-                    <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                      No stats yet. Start a run to see real-time metrics.
+                    <div className="h-full flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground text-center px-4">
+                      <p>No stats yet. Start a run to see real-time metrics.</p>
+                      <p className="text-xs">
+                        Console errors like &quot;Receiving end does not exist&quot; come from a browser extension, not this app.
+                      </p>
                     </div>
                   ) : (
-                    <>
+                    <div className="flex-1 min-h-[360px]">
                       {statsTab === 'iops' && (
                         <StatsChart data={statsData} title="IOPS" type="iops" height={360} />
                       )}
@@ -1102,7 +1152,7 @@ export default function App() {
                       {statsTab === 'lat' && (
                         <StatsChart data={statsData} title="Latency (ms)" type="lat" height={360} />
                       )}
-                    </>
+                    </div>
                   )}
                 </div>
               </CardContent>

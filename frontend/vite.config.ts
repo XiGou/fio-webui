@@ -13,8 +13,9 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     proxy: {
-      '/api': { target: 'http://localhost:8080', changeOrigin: true },
-      '/api/events': { target: 'http://localhost:8080', ws: true },
+      // Put websocket route first; otherwise '/api' may capture it.
+      '/api/events': { target: 'http://localhost:8080', changeOrigin: true, ws: true },
+      '/api': { target: 'http://localhost:8080', changeOrigin: true, ws: true },
     },
   },
   build: {

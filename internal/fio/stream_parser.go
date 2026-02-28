@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -49,6 +50,28 @@ type Latency struct {
 type Stat struct {
 	Name  string `json:"name"`
 	Value int64  `json:"value"`
+}
+
+// fioSingleJobLine is the per-line JSON format fio uses for --status-interval (single job object at top level)
+type fioSingleJobLine struct {
+	JobStart int64          `json:"job_start"`
+	JobName  string         `json:"jobname"`
+	GroupID  int            `json:"groupid"`
+	Error    int            `json:"error"`
+	ETA      uint64         `json:"eta"`
+	Elapsed  uint64         `json:"elapsed"`
+	Read     fioIOStatsAlt  `json:"read"`
+	Write    fioIOStatsAlt  `json:"write"`
+}
+
+type fioIOStatsAlt struct {
+	IOPS    float64 `json:"iops"`
+	BW      int64   `json:"bw"`
+	Runtime uint64  `json:"runtime"`
+	ClatNs  struct {
+		Mean       float64           `json:"mean"`
+		Percentile map[string]uint64 `json:"percentile"` // e.g. "50.000000" -> value in ns
+	} `json:"clat_ns"`
 }
 
 // StreamJSONParser parses fio's real-time status JSON output
@@ -150,13 +173,24 @@ func (p *StreamJSONParser) parse() {
 		// Try to parse current line as complete JSON first
 		var status StatusUpdate
 		if err := json.Unmarshal([]byte(trimmedLine), &status); err == nil {
-			// Valid JSON on single line
+			if status.Time > 0 && len(status.Jobs) > 0 {
+				p.handleStatusUpdate(lineCount, trimmedLine, &status)
+				continue
+			}
+			// Time/Jobs empty: try fio single-job format (job_start, read, write at top level)
+			var single fioSingleJobLine
+			if err2 := json.Unmarshal([]byte(trimmedLine), &single); err2 == nil && single.JobStart > 0 {
+				if converted := singleJobToStatusUpdate(&single); converted != nil {
+					p.handleStatusUpdate(lineCount, trimmedLine, converted)
+					continue
+				}
+			}
 			p.handleStatusUpdate(lineCount, trimmedLine, &status)
 			continue
 		}
 
 		// Not valid JSON on its own, might be part of multi-line JSON or regular output
-		// Check if line starts with '{' - likely start of JSON object
+		// New object starts: either we have no buffer, or this line starts with '{'
 		if strings.HasPrefix(trimmedLine, "{") {
 			jsonBuffer = trimmedLine
 			if Debug {
@@ -165,29 +199,47 @@ func (p *StreamJSONParser) parse() {
 			continue
 		}
 
-		// If we have buffered JSON, append this line and try to parse
+		// If we have buffered JSON, append this line and try to parse when we see '}'
 		if jsonBuffer != "" {
+			// New object starting: previous buffer was incomplete, start fresh
+			if strings.HasPrefix(trimmedLine, "{") {
+				jsonBuffer = trimmedLine
+				if Debug {
+					log.Printf("[DEBUG] StreamJSONParser: Line %d - New JSON object, reset buffer", lineCount)
+				}
+				continue
+			}
 			jsonBuffer += " " + trimmedLine
 			if Debug {
 				log.Printf("[DEBUG] StreamJSONParser: Line %d - Appending to JSON buffer (total: %d chars)", lineCount, len(jsonBuffer))
 			}
 
-			// Check if line ends with '}' - might be end of JSON object
+			// Only try parse when line ends with '}' (possible end of top-level object)
 			if strings.HasSuffix(trimmedLine, "}") {
 				if err := json.Unmarshal([]byte(jsonBuffer), &status); err == nil {
 					if Debug {
 						log.Printf("[DEBUG] StreamJSONParser: Line %d - Completed multi-line JSON", lineCount)
 					}
-					p.handleStatusUpdate(lineCount, jsonBuffer, &status)
+					if status.Time > 0 && len(status.Jobs) > 0 {
+						p.handleStatusUpdate(lineCount, jsonBuffer, &status)
+					} else {
+						var single fioSingleJobLine
+						if err2 := json.Unmarshal([]byte(jsonBuffer), &single); err2 == nil && single.JobStart > 0 {
+							if converted := singleJobToStatusUpdate(&single); converted != nil {
+								p.handleStatusUpdate(lineCount, jsonBuffer, converted)
+							} else {
+								p.handleStatusUpdate(lineCount, jsonBuffer, &status)
+							}
+						} else {
+							p.handleStatusUpdate(lineCount, jsonBuffer, &status)
+						}
+					}
 					jsonBuffer = ""
 					continue
-				} else {
-					if Debug {
-						log.Printf("[DEBUG] StreamJSONParser: Line %d - JSON buffer parse failed: %v", lineCount, err)
-					}
-					// Invalid JSON, send buffer as output
-					p.sendOutput(lineCount, jsonBuffer)
-					jsonBuffer = ""
+				}
+				// Parse failed: might be inner '}' only (e.g. "clat_ns": { ... }). Keep appending.
+				if Debug {
+					log.Printf("[DEBUG] StreamJSONParser: Line %d - JSON buffer not complete yet (parse failed), continuing", lineCount)
 				}
 			}
 			continue
@@ -258,6 +310,49 @@ func (p *StreamJSONParser) GetLastStatus() *StatusUpdate {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastStatus
+}
+
+// singleJobToStatusUpdate converts fio's single-job JSON line to StatusUpdate so we can emit stats.
+// job_start is in ms (Unix or elapsed); we store Time in seconds for consistency with StatsDataPoint.
+func singleJobToStatusUpdate(single *fioSingleJobLine) *StatusUpdate {
+	if single == nil || single.JobStart <= 0 {
+		return nil
+	}
+	var latNs []Latency
+	for k, v := range single.Read.ClatNs.Percentile {
+		pct, err := strconv.ParseFloat(k, 64)
+		if err != nil || pct < 0 || pct > 100 {
+			continue
+		}
+		latNs = append(latNs, Latency{Percentile: uint32(pct), Value: v})
+	}
+	// fio "bw" is in 1024-byte (KiB) per second; we store bytes/sec
+	const kib = 1024
+	read := IOStats{
+		IOPS:      single.Read.IOPS,
+		BW:        single.Read.BW * kib,
+		LatencyNs: latNs,
+	}
+	write := IOStats{
+		IOPS: single.Write.IOPS,
+		BW:   single.Write.BW * kib,
+	}
+	timeSec := single.JobStart / 1000
+	if timeSec <= 0 {
+		timeSec = single.JobStart
+	}
+	return &StatusUpdate{
+		Time: timeSec,
+		Jobs: []JobStatus{{
+			JobName: single.JobName,
+			GroupID: single.GroupID,
+			Error:   single.Error,
+			ETA:     single.ETA,
+			Elapsed: single.Elapsed,
+			Read:    read,
+			Write:   write,
+		}},
+	}
 }
 
 // ConvertToStatsIncrement converts StatusUpdate to FioStatsIncrement format for compatibility
