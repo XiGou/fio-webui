@@ -17,7 +17,7 @@ import { StatsChart } from '@/components/StatsChart'
 import { Layout } from '@/components/Layout'
 import { PresetsPage } from '@/pages/PresetsPage'
 import { HistoryPage } from '@/pages/HistoryPage'
-import type { PresetWorkload } from '@/data/presets'
+import type { PresetWorkload } from './data/presets'
 import type {
   DefaultsResponse,
   FioConfig,
@@ -85,13 +85,13 @@ function newTaskDraft(base?: Partial<FioTask>): TaskDraft {
       output_format: 'json',
       status_interval: 1,
     },
-    jobs: base?.jobs?.map((j) => ({ ...j })) || [newJobDraft({ name: 'job1' })],
+    jobs: base?.jobs?.map((j: JobConfig) => ({ ...j })) || [newJobDraft({ name: 'job1' })],
   }
 }
 
 function presetToTaskDraft(preset: PresetWorkload): TaskDraft {
   const task = preset.task
-  const jobs: JobDraft[] = task.jobs.map((j, i) => {
+  const jobs: JobDraft[] = task.jobs.map((j: JobConfig, i: number) => {
     const draft = newJobDraft(j) as JobDraft
     if (preset.stonewallBetweenJobs && i < task.jobs.length - 1) {
       draft._stonewallAfter = true

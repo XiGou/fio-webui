@@ -26,7 +26,7 @@ export function PresetsPage() {
   }
 
   const grouped = PRESETS.reduce<Record<PresetWorkload['category'], PresetWorkload[]>>(
-    (acc, p) => {
+    (acc: Record<PresetWorkload['category'], PresetWorkload[]>, p: PresetWorkload) => {
       if (!acc[p.category]) acc[p.category] = []
       acc[p.category].push(p)
       return acc
