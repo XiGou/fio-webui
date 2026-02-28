@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { PRESETS, type PresetWorkload } from '@/data/presets'
+import { PRESETS, type PresetWorkload } from '../data/presets'
 import { ClipboardList, HardDrive, Shuffle, Layers } from 'lucide-react'
 
 const CATEGORY_LABEL: Record<PresetWorkload['category'], string> = {
@@ -25,7 +25,7 @@ export function PresetsPage() {
     navigate('/', { state: { preset }, replace: false })
   }
 
-  const grouped = PRESETS.reduce(
+  const grouped = PRESETS.reduce<Record<PresetWorkload['category'], PresetWorkload[]>>(
     (acc, p) => {
       if (!acc[p.category]) acc[p.category] = []
       acc[p.category].push(p)
@@ -60,7 +60,7 @@ export function PresetsPage() {
               </CardHeader>
               <CardContent>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {items.map((preset) => (
+                  {items.map((preset: PresetWorkload) => (
                     <PresetCard key={preset.id} preset={preset} onApply={() => applyPreset(preset)} />
                   ))}
                 </div>

@@ -735,7 +735,7 @@ export default function App() {
                   const taskJobs = task.jobs as JobDraft[]
                   const validationErrors = task._validationErrors
                   const hasErrors = validationErrors?.errors && validationErrors.errors.length > 0
-                  
+
                   return (
                     <div key={task._id} className="rounded border border-border bg-card">
                       {/* Task Header */}
@@ -988,8 +988,8 @@ export default function App() {
 
                                           <div className="space-y-1.5">
                                             <Label className="text-xs">IO Engine (override)</Label>
-                                            <Select 
-                                              value={j.ioengine ?? '__global__'} 
+                                            <Select
+                                              value={j.ioengine ?? '__global__'}
                                               onValueChange={(v) => updateJobInTask(task._id, j._id, { ioengine: v === '__global__' ? undefined : v })}
                                             >
                                               <SelectTrigger className="h-9">
