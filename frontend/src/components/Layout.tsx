@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, ClipboardList } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, History } from 'lucide-react'
 
 export function Layout() {
   return (
@@ -24,6 +24,20 @@ export function Layout() {
               >
                 <LayoutDashboard className="h-4 w-4" />
                 任务
+              </NavLink>
+              <NavLink
+                to="/history"
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )
+                }
+              >
+                <History className="h-4 w-4" />
+                历史
               </NavLink>
               <NavLink
                 to="/presets"

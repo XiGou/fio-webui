@@ -61,13 +61,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// 		}
 		// 	}
 
-		case line := <-s.executor.GetOutputChan():
-			// Only send output when there's actually new data
-			if line != "" {
-				sendMsg(SSEMessage{Type: "output", Data: map[string]interface{}{
-					"line": line,
-				}})
-			}
+		case <-s.executor.GetOutputChan():
+			// Output is persisted server-side; frontend fetches log-summary API (summary + errors only)
 
 		case status := <-s.executor.GetStatusChan():
 			// Send real-time aggregated stats updates (same shape as /api/stats)

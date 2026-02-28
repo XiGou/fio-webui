@@ -16,6 +16,7 @@ import { ansiToHtml } from '@/lib/ansi'
 import { StatsChart } from '@/components/StatsChart'
 import { Layout } from '@/components/Layout'
 import { PresetsPage } from '@/pages/PresetsPage'
+import { HistoryPage } from '@/pages/HistoryPage'
 import type { PresetWorkload } from '@/data/presets'
 import type {
   DefaultsResponse,
@@ -23,6 +24,7 @@ import type {
   FioTask,
   FioTaskList,
   JobConfig,
+  LogSummary,
   OptionsResponse,
   RunState,
   StatsDataPoint,
@@ -144,7 +146,8 @@ export default function App() {
   })
   const [tasks, setTasks] = useState<TaskDraft[]>([newTaskDraft({ name: 'task1' })])
   const [state, setState] = useState<RunState | null>(null)
-  const [outputLines, setOutputLines] = useState<string[]>([])
+  const [outputLines, setOutputLines] = useState<string[]>([]) // Transient messages (Starting, Stopping, Error)
+  const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
   const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
   const [backendOffline, setBackendOffline] = useState(false)
   const [wsReconnecting, setWsReconnecting] = useState(false)
@@ -266,13 +269,6 @@ export default function App() {
         try {
           const msg = JSON.parse(e.data) as WsMessage
           if (msg.type === 'status') setState(msg.data as RunState)
-          if (msg.type === 'output' && msg.data) {
-            const out = msg.data as { line?: string }
-            const line = out.line
-            if (typeof line === 'string') {
-              setOutputLines((prev) => [...prev.slice(-99), line])
-            }
-          }
           if (msg.type === 'stats' && msg.data) {
             const point = normalizeStatsPoint(msg.data)
             if (!point) return
@@ -350,24 +346,63 @@ export default function App() {
     }
   }, [statsPanelOpen, fetchStatsHistory])
 
+  // Fetch log summary when Log panel opens (server-parsed summary + errors only)
+  const fetchLogSummary = useCallback(async (runId: string) => {
+    try {
+      const res = await fetch(`/api/runs/${runId}/log-summary`)
+      if (!res.ok) return
+      const data = (await res.json()) as LogSummary
+      setLogSummary(data)
+    } catch {
+      setLogSummary(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!logPanelOpen) return
+    const runId = state?.id
+    if (runId) {
+      fetchLogSummary(runId)
+      if (state?.status === 'running') {
+        const id = setInterval(() => fetchLogSummary(runId), 2000)
+        return () => clearInterval(id)
+      }
+    } else {
+      setLogSummary(null)
+    }
+  }, [logPanelOpen, state?.id, state?.status, fetchLogSummary])
+
   useEffect(() => {
     if (logPanelOpen) {
       outputEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }
-  }, [outputLines, logPanelOpen])
+  }, [outputLines, logSummary, logPanelOpen])
 
   const location = useLocation()
   const navigate = useNavigate()
 
   // Apply preset when navigating from Presets page with state.preset
+  // Apply runConfig when navigating from History page with state.runConfig
   useEffect(() => {
     const preset = location.state?.preset as PresetWorkload | undefined
+    const runConfig = location.state?.runConfig as FioTaskList | undefined
     if (preset) {
       const draft = presetToTaskDraft(preset)
       setTasks((prev) => {
         const collapsedPrev = prev.map((t) => ({ ...t, _collapsed: true }))
         return [...collapsedPrev, draft]
       })
+      navigate('/', { replace: true, state: {} })
+    } else if (runConfig?.tasks?.length) {
+      const drafts: TaskDraft[] = runConfig.tasks.map((t) => {
+        const jobs = t.jobs.map((j) => {
+          const d = newJobDraft(j) as JobDraft
+          d._stonewallAfter = j.stonewallAfter ?? false
+          return d
+        })
+        return newTaskDraft({ name: t.name, global: t.global, jobs })
+      })
+      setTasks(drafts.map((d) => ({ ...d, _collapsed: true })))
       navigate('/', { replace: true, state: {} })
     }
   }, [location.state, navigate])
@@ -378,6 +413,7 @@ export default function App() {
     if (taskList.tasks.length === 0) return
     if (taskList.tasks.every((t) => t.jobs.length === 0)) return
     setOutputLines(['Starting test...'])
+    setLogSummary(null)
     setStatsData([]) // Clear previous stats
     const res = await fetch('/api/run', {
       method: 'POST',
@@ -1090,17 +1126,48 @@ export default function App() {
           <div className="fixed right-0 top-0 z-50 h-full w-full max-w-2xl border-l border-border bg-card shadow-xl">
             <div className="flex h-full flex-col">
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <h2 className="text-base font-medium text-foreground">Output Log</h2>
+                <h2 className="text-base font-medium text-foreground">日志摘要</h2>
                 <Button variant="ghost" size="sm" onClick={() => setLogPanelOpen(false)}>
                   ×
                 </Button>
               </div>
               <div className="flex-1 overflow-auto p-4">
-                <div className="output-terminal">
-                  {outputLines.length === 0 && <span className="text-muted-foreground">Output will appear here.</span>}
-                  {outputLines.map((line, i) => (
-                    <div key={i} dangerouslySetInnerHTML={{ __html: ansiToHtml(line) }} />
-                  ))}
+                <div className="space-y-4">
+                  {outputLines.length > 0 && (
+                    <div className="text-sm">
+                      {outputLines.map((line, i) => (
+                        <div key={i} dangerouslySetInnerHTML={{ __html: ansiToHtml(line) }} />
+                      ))}
+                    </div>
+                  )}
+                  {logSummary && (
+                    <>
+                      {logSummary.summary && (
+                        <div>
+                          <div className="text-xs font-medium text-foreground mb-1">摘要</div>
+                          <pre className="text-xs bg-muted/50 p-3 rounded overflow-auto max-h-48 whitespace-pre-wrap font-mono">
+                            {logSummary.summary}
+                          </pre>
+                        </div>
+                      )}
+                      {logSummary.errors?.length ? (
+                        <div>
+                          <div className="text-xs font-medium text-destructive mb-1">错误</div>
+                          <pre className="text-xs bg-destructive/10 p-3 rounded overflow-auto max-h-48 whitespace-pre-wrap font-mono text-destructive">
+                            {logSummary.errors.join('\n')}
+                          </pre>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
+                  {!logSummary && !outputLines.length && state?.id && (
+                    <span className="text-muted-foreground">
+                      {state?.status === 'running' ? '采集中…' : '暂无摘要'}
+                    </span>
+                  )}
+                  {!state?.id && !outputLines.length && (
+                    <span className="text-muted-foreground">启动任务后查看日志摘要</span>
+                  )}
                   <div ref={outputEndRef} />
                 </div>
               </div>
@@ -1195,6 +1262,7 @@ export default function App() {
             </div>
           }
         />
+        <Route path="history" element={<HistoryPage />} />
         <Route path="presets" element={<PresetsPage />} />
       </Route>
     </Routes>

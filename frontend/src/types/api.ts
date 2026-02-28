@@ -115,6 +115,35 @@ export interface StatusUpdate {
   errors?: Record<string, unknown>
 }
 
+// Run history types
+export interface RunSummary {
+  iops: number
+  iops_read: number
+  iops_write: number
+  bw: number
+  bw_read: number
+  bw_write: number
+  lat_mean: number
+  lat_p50: number
+  lat_p95: number
+  lat_p99: number
+}
+
+export interface RunRecord {
+  id: string
+  status: string
+  start_time: string
+  end_time?: string
+  error?: string
+  disk_bytes: number
+  summary?: RunSummary
+}
+
+export interface LogSummary {
+  summary: string
+  errors: string[]
+}
+
 // Data point for charting
 export interface StatsDataPoint {
   time: number // Unix timestamp (seconds)

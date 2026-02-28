@@ -16,9 +16,10 @@ var webFS embed.FS
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP server address")
 	debug := flag.Bool("debug", false, "Enable debug logging")
+	dataDir := flag.String("data", "./data", "Data directory for run history (persistent)")
 	flag.Parse()
 
-	srv, err := server.New(*addr, webFS, *debug)
+	srv, err := server.New(*addr, webFS, *debug, *dataDir)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}

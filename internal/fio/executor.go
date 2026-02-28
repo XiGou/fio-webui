@@ -38,23 +38,25 @@ type RunState struct {
 type Executor struct {
 	mu           sync.RWMutex
 	state        *RunState
-	// logWatcher   *LogWatcher
 	streamParser *StreamJSONParser
 	outputCh     chan string
 	statusCh     chan *StatusUpdate
 	cancel       context.CancelFunc
 	cmd          *exec.Cmd
-	WorkDir      string
+	WorkDir      string   // scratch for validate etc
+	RunStore     *RunStore // persistent run records
+	lastStats    *StatsDataPoint
 	statsMu      sync.Mutex
 }
 
-func NewExecutor(workDir string) *Executor {
+func NewExecutor(workDir string, store *RunStore) *Executor {
 	if workDir == "" {
 		workDir = "./data"
 	}
 	os.MkdirAll(workDir, 0755)
 	return &Executor{
-		WorkDir: workDir,
+		WorkDir:  workDir,
+		RunStore: store,
 		state: &RunState{
 			Status: StatusIdle,
 		},
@@ -117,8 +119,27 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 		return nil, fmt.Errorf("no jobs to run")
 	}
 
-	runID := fmt.Sprintf("run_%d", time.Now().Unix())
-	logPrefix := filepath.Join(e.WorkDir, runID)
+	runID := NewRunID()
+	runDir := ""
+	if e.RunStore != nil {
+		var err error
+		runDir, err = e.RunStore.EnsureRunDir(runID)
+		if err != nil {
+			e.mu.Unlock()
+			return nil, fmt.Errorf("create run dir: %w", err)
+		}
+		taskList := FioTaskList{Tasks: []FioTask{{Name: "task1", Global: config.Global, Jobs: config.Jobs}}}
+		if err := e.RunStore.SaveConfig(runID, &taskList); err != nil {
+			if Debug {
+				log.Printf("[DEBUG] SaveConfig: %v", err)
+			}
+		}
+	}
+	if runDir == "" {
+		runDir = filepath.Join(e.WorkDir, runID)
+		os.MkdirAll(runDir, 0755)
+	}
+	logPrefix := runDir
 
 	// Check if any job has stonewallAfter set
 	hasStonewall := false
@@ -132,7 +153,7 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	var jobFiles []string
 	if hasStonewall {
 		// Generate a single jobfile with all jobs and stonewall directives
-		jobFile := filepath.Join(e.WorkDir, fmt.Sprintf("%s.fio", runID))
+		jobFile := filepath.Join(runDir, "job.fio")
 		jobContent := config.ToINI(logPrefix, -1)
 		if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
 			e.mu.Unlock()
@@ -146,7 +167,7 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 		// Generate one jobfile per job (each job is a separate fio command)
 		jobFiles = make([]string, len(config.Jobs))
 		for i := range config.Jobs {
-			jobFile := filepath.Join(e.WorkDir, fmt.Sprintf("%s_job%d.fio", runID, i))
+			jobFile := filepath.Join(runDir, fmt.Sprintf("job%d.fio", i))
 			jobContent := config.ToINI(logPrefix, i)
 			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
 				e.mu.Unlock()
@@ -208,8 +229,23 @@ func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
 		return nil, fmt.Errorf("no tasks to run")
 	}
 
-	runID := fmt.Sprintf("run_%d", time.Now().Unix())
-	logPrefix := filepath.Join(e.WorkDir, runID)
+	runID := NewRunID()
+	runDir := ""
+	if e.RunStore != nil {
+		var err error
+		runDir, err = e.RunStore.EnsureRunDir(runID)
+		if err != nil {
+			e.mu.Unlock()
+			return nil, fmt.Errorf("create run dir: %w", err)
+		}
+		if err := e.RunStore.SaveConfig(runID, &FioTaskList{Tasks: tasks}); err != nil && Debug {
+			log.Printf("[DEBUG] SaveConfig: %v", err)
+		}
+	}
+	if runDir == "" {
+		runDir = filepath.Join(e.WorkDir, runID)
+		os.MkdirAll(runDir, 0755)
+	}
 
 	e.state = &RunState{
 		ID:        runID,
@@ -225,13 +261,13 @@ func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
 	e.cancel = cancel
 	e.mu.Unlock()
 
-	go e.runTasksSequential(ctx, tasks, runID, logPrefix)
+	go e.runTasksSequential(ctx, tasks, runID, runDir)
 
 	return e.state, nil
 }
 
 // runTasksSequential runs multiple tasks sequentially (one task after another)
-func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runID, logPrefix string) {
+func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runID, runDir string) {
 	for i, task := range tasks {
 		select {
 		case <-ctx.Done():
@@ -263,9 +299,9 @@ func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runI
 		}
 
 		var jobFile string
-		taskLogPrefix := filepath.Join(logPrefix, fmt.Sprintf("task%d", i))
+		taskLogPrefix := filepath.Join(runDir, fmt.Sprintf("task%d", i))
 		if hasStonewall {
-			jobFile = filepath.Join(e.WorkDir, fmt.Sprintf("%s_task%d.fio", runID, i))
+			jobFile = filepath.Join(runDir, fmt.Sprintf("task%d.fio", i))
 			jobContent := config.ToINI(taskLogPrefix, -1)
 			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
 				e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
@@ -276,7 +312,7 @@ func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runI
 			if len(task.Jobs) == 0 {
 				continue
 			}
-			jobFile = filepath.Join(e.WorkDir, fmt.Sprintf("%s_task%d_job0.fio", runID, i))
+			jobFile = filepath.Join(runDir, fmt.Sprintf("task%d_job0.fio", i))
 			jobContent := config.ToINI(taskLogPrefix, 0)
 			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
 				e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
@@ -290,18 +326,17 @@ func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runI
 
 	// All tasks completed
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if e.streamParser != nil {
 		e.streamParser.Stop()
 	}
-
 	if e.state != nil && e.state.ID == runID {
 		e.state.EndTime = time.Now()
 		if e.state.Status == StatusRunning {
 			e.state.Status = StatusFinished
 		}
+		e.finalizeRun(runID)
 	}
+	e.mu.Unlock()
 }
 
 // runFioSequential runs multiple fio commands sequentially (one after another)
@@ -326,18 +361,17 @@ func (e *Executor) runFioSequential(ctx context.Context, config *FioConfig, jobF
 
 	// All jobs completed
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if e.streamParser != nil {
 		e.streamParser.Stop()
 	}
-
 	if e.state != nil && e.state.ID == runID {
 		e.state.EndTime = time.Now()
 		if e.state.Status == StatusRunning {
 			e.state.Status = StatusFinished
 		}
+		e.finalizeRun(runID)
 	}
+	e.mu.Unlock()
 }
 
 // runFioParallel runs multiple fio commands in parallel
@@ -359,18 +393,53 @@ func (e *Executor) runFioParallel(ctx context.Context, config *FioConfig, jobFil
 
 	// All jobs completed
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if e.streamParser != nil {
 		e.streamParser.Stop()
 	}
-
 	if e.state != nil && e.state.ID == runID {
 		e.state.EndTime = time.Now()
 		if e.state.Status == StatusRunning {
 			e.state.Status = StatusFinished
 		}
+		e.finalizeRun(runID)
 	}
+	e.mu.Unlock()
+}
+
+func (e *Executor) finalizeRun(runID string) {
+	if e.RunStore == nil {
+		return
+	}
+	e.statsMu.Lock()
+	last := e.lastStats
+	e.statsMu.Unlock()
+	status, startTime, endTime, errMsg := string(e.state.Status), e.state.StartTime, e.state.EndTime, e.state.Error
+	e.mu.Unlock()
+	defer e.mu.Lock()
+	dir := e.RunStore.RunDir(runID)
+	diskBytes, _ := DirSize(dir)
+	var summary *RunSummary
+	if last != nil {
+		summary = &RunSummary{
+			IOPS: last.IOPS, IOPSRead: last.IOPSRead, IOPSWrite: last.IOPSWrite,
+			BW: last.BW, BWRead: last.BWRead, BWWrite: last.BWWrite,
+			LatMean: last.LatMean, LatP50: 0, LatP95: last.LatP95, LatP99: last.LatP99,
+		}
+	}
+	meta := &RunMeta{
+		ID:        runID,
+		Status:    status,
+		StartTime: startTime.Format(time.RFC3339),
+		DiskBytes: diskBytes,
+		Summary:   summary,
+	}
+	if !endTime.IsZero() {
+		meta.EndTime = endTime.Format(time.RFC3339)
+	}
+	if errMsg != "" {
+		meta.Error = errMsg
+	}
+	e.RunStore.SaveMeta(runID, meta)
 }
 
 func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID, logPrefix string, jobIndex int) {
@@ -435,39 +504,41 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 		}
 	}(runID)
 
-	// Forward output from stream parser to output channel
-	go func() {
+	// Forward output from stream parser to output channel and persist
+	go func(curRunID string) {
 		for line := range e.streamParser.OutputChan() {
 			if len(output) < maxOutputSize {
 				output += line
 			}
-			// Send to channel for real-time updates
+			if e.RunStore != nil {
+				e.RunStore.AppendOutput(curRunID, line)
+			}
 			select {
 			case e.outputCh <- line:
 			case <-ctx.Done():
 				return
 			default:
-				// Channel full, skip
 			}
 		}
-	}()
+	}(runID)
 
-	// Read stderr and send to output channel in real-time
-	go func() {
+	// Read stderr and send to output channel, persist
+	go func(curRunID string) {
 		scanner := bufio.NewScanner(stderr)
 		for scanner.Scan() {
 			line := scanner.Text() + "\n"
 			if len(output) < maxOutputSize {
 				output += line
 			}
-			// Send to channel for real-time updates
+			if e.RunStore != nil {
+				e.RunStore.AppendOutput(curRunID, line)
+			}
 			select {
 			case e.outputCh <- line:
 			default:
-				// Channel full, skip
 			}
 		}
-	}()
+	}(runID)
 
 	err = cmd.Wait()
 
@@ -488,12 +559,14 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 	}
 }
 
-// appendStatsPoint appends a single StatsDataPoint as a JSON line to the
-// per-run history file. Best-effort only; failures are logged in debug mode.
+// appendStatsPoint appends a single StatsDataPoint to the run's stats file.
 func (e *Executor) appendStatsPoint(runID string, point *StatsDataPoint) {
 	if runID == "" || point == nil {
 		return
 	}
+	e.statsMu.Lock()
+	e.lastStats = point
+	e.statsMu.Unlock()
 
 	data, err := json.Marshal(point)
 	if err != nil {
@@ -502,35 +575,37 @@ func (e *Executor) appendStatsPoint(runID string, point *StatsDataPoint) {
 		}
 		return
 	}
-	data = append(data, '\n')
 
-	filename := filepath.Join(e.WorkDir, fmt.Sprintf("%s_stats.jsonl", runID))
+	if e.RunStore != nil {
+		if err := e.RunStore.AppendStatsLine(runID, data); err != nil && Debug {
+			log.Printf("[DEBUG] AppendStatsLine: %v", err)
+		}
+		return
+	}
 
-	e.statsMu.Lock()
-	defer e.statsMu.Unlock()
-
+	// Fallback: write to WorkDir (legacy)
+	filename := filepath.Join(e.WorkDir, runID, "stats.jsonl")
+	os.MkdirAll(filepath.Dir(filename), 0755)
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		if Debug {
-			log.Printf("[DEBUG] Failed to open stats history file %s: %v", filename, err)
+			log.Printf("[DEBUG] Failed to open stats file %s: %v", filename, err)
 		}
 		return
 	}
 	defer f.Close()
-
-	if _, err := f.Write(data); err != nil && Debug {
-		log.Printf("[DEBUG] Failed to write stats history to %s: %v", filename, err)
-	}
+	f.Write(append(data, '\n'))
 }
 
 // GetStatsHistory reads the aggregated stats history for the given run ID.
-// It returns an empty slice when no history is available.
 func (e *Executor) GetStatsHistory(runID string) ([]StatsDataPoint, error) {
 	if runID == "" {
 		return []StatsDataPoint{}, nil
 	}
-
-	filename := filepath.Join(e.WorkDir, fmt.Sprintf("%s_stats.jsonl", runID))
+	if e.RunStore != nil {
+		return e.RunStore.GetStats(runID)
+	}
+	filename := filepath.Join(e.WorkDir, runID, "stats.jsonl")
 	f, err := os.Open(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -539,23 +614,16 @@ func (e *Executor) GetStatsHistory(runID string) ([]StatsDataPoint, error) {
 		return nil, err
 	}
 	defer f.Close()
-
 	var points []StatsDataPoint
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		var p StatsDataPoint
 		if err := json.Unmarshal(scanner.Bytes(), &p); err != nil {
-			if Debug {
-				log.Printf("[DEBUG] Failed to unmarshal stats history line: %v", err)
-			}
 			continue
 		}
 		points = append(points, p)
 	}
-	if err := scanner.Err(); err != nil {
-		return points, err
-	}
-	return points, nil
+	return points, scanner.Err()
 }
 
 type ValidationError struct {
@@ -668,10 +736,6 @@ func (e *Executor) setError(runID string, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// if e.logWatcher != nil {
-	// 	e.logWatcher.Stop()
-	// }
-
 	if e.streamParser != nil {
 		e.streamParser.Stop()
 	}
@@ -680,5 +744,6 @@ func (e *Executor) setError(runID string, err error) {
 		e.state.Status = StatusError
 		e.state.Error = err.Error()
 		e.state.EndTime = time.Now()
+		e.finalizeRun(runID)
 	}
 }

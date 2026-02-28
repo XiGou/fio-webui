@@ -19,48 +19,41 @@ var upgrader = websocket.Upgrader{
 
 type Server struct {
 	executor   *fio.Executor
+	runStore   *fio.RunStore
 	staticFS   fs.FS
 	addr       string
 	debug      bool
-	logDir     string
-	shutdownCh chan struct{} // 关闭后 Run() 退出并做优雅 Shutdown
+	dataDir    string
+	shutdownCh chan struct{}
 }
 
-func New(addr string, webFS embed.FS, debug bool) (*Server, error) {
+func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, error) {
 	fio.Debug = debug
-
-	// Create temporary directory for IO logs in memory (/dev/shm or /tmp)
-	logDir := ""
-	if info, err := os.Stat("/dev/shm"); err == nil && info.IsDir() {
-		// Use /dev/shm if available (tmpfs on Linux)
-		logDir, err = os.MkdirTemp("/dev/shm", "fio-webui-*")
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		// Fallback to /tmp
-		logDir, err = os.MkdirTemp("", "fio-webui-*")
-		if err != nil {
-			return nil, err
-		}
+	if dataDir == "" {
+		dataDir = "./data"
 	}
-
-	if debug {
-		log.Printf("Log directory: %s", logDir)
-	}
-
-	distFS, err := fs.Sub(webFS, "web/dist")
-	if err != nil {
-		os.RemoveAll(logDir)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
-
+	store, err := fio.NewRunStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	exec := fio.NewExecutor(dataDir, store)
+	if debug {
+		log.Printf("Data directory: %s", dataDir)
+	}
+	distFS, err := fs.Sub(webFS, "web/dist")
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
-		executor:   fio.NewExecutor(logDir),
+		executor:   exec,
+		runStore:   store,
 		staticFS:   distFS,
 		addr:       addr,
 		debug:      debug,
-		logDir:     logDir,
+		dataDir:    dataDir,
 		shutdownCh: make(chan struct{}),
 	}, nil
 }
@@ -76,6 +69,8 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/stats", s.handleStatsHistory)
 	mux.HandleFunc("/api/events", s.handleWebSocket)
+	mux.HandleFunc("/api/runs", s.handleRuns)
+	mux.HandleFunc("/api/runs/", s.handleRuns)
 	if s.debug {
 		mux.HandleFunc("/api/debug/files", s.handleDebugFiles)
 		log.Println("Debug mode enabled")
@@ -103,13 +98,5 @@ func (s *Server) Run() error {
 // Shutdown 触发优雅退出（供 signal 或测试调用）
 func (s *Server) Shutdown() { close(s.shutdownCh) }
 
-// Cleanup removes temporary log directory
-func (s *Server) Cleanup() {
-	if s.logDir != "" {
-		if err := os.RemoveAll(s.logDir); err != nil {
-			log.Printf("Failed to cleanup log directory %s: %v", s.logDir, err)
-		} else if s.debug {
-			log.Printf("Cleaned up log directory: %s", s.logDir)
-		}
-	}
-}
+// Cleanup runs on shutdown (data is persistent, no cleanup needed)
+func (s *Server) Cleanup() {}

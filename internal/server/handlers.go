@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gouxi/fio-webui/internal/fio"
 )
@@ -149,6 +150,94 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(points)
+}
+
+func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/runs")
+	path = strings.Trim(path, "/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+	sub := ""
+	if len(parts) > 1 {
+		sub = parts[1]
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if id == "" {
+			ids, err := s.runStore.List()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			type runItem struct {
+				ID        string             `json:"id"`
+				Status    string             `json:"status"`
+				StartTime string             `json:"start_time"`
+				EndTime   string             `json:"end_time,omitempty"`
+				Error     string             `json:"error,omitempty"`
+				DiskBytes int64              `json:"disk_bytes"`
+				Summary   *fio.RunSummary    `json:"summary,omitempty"`
+			}
+			items := make([]runItem, 0, len(ids))
+			for _, rid := range ids {
+				meta, err := s.runStore.GetMeta(rid)
+				if err != nil {
+					continue
+				}
+				items = append(items, runItem{
+					ID: meta.ID, Status: meta.Status, StartTime: meta.StartTime, EndTime: meta.EndTime,
+					Error: meta.Error, DiskBytes: meta.DiskBytes, Summary: meta.Summary,
+				})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(items)
+			return
+		}
+		if sub == "log-summary" {
+			summary, err := s.runStore.GetLogSummary(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(summary)
+			return
+		}
+		if sub == "stats" {
+			points, err := s.runStore.GetStats(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(points)
+			return
+		}
+		meta, err := s.runStore.GetMeta(id)
+		if err != nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		cfg, _ := s.runStore.GetConfig(id)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"meta": meta, "config": cfg,
+		})
+	case http.MethodDelete:
+		if id == "" {
+			http.Error(w, "id required", http.StatusBadRequest)
+			return
+		}
+		if err := s.runStore.Delete(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) handleDebugFiles(w http.ResponseWriter, r *http.Request) {
