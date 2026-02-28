@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 
@@ -56,7 +57,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	var taskList fio.FioTaskList
 	bodyBytes := make([]byte, 0)
 	if r.Body != nil {
-		bodyBytes, _ = os.ReadAll(r.Body)
+		bodyBytes, _ = io.ReadAll(r.Body)
 		r.Body.Close()
 	}
 
@@ -128,6 +129,26 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	state := s.executor.GetState()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(state)
+}
+
+// handleStatsHistory returns aggregated performance metrics for the current run.
+// The backend persists one JSON line per data point while fio is running, and
+// this endpoint simply streams them back as an array for initial chart render.
+func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	runID := s.executor.GetCurrentRunID()
+	points, err := s.executor.GetStatsHistory(runID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(points)
 }
 
 func (s *Server) handleDebugFiles(w http.ResponseWriter, r *http.Request) {

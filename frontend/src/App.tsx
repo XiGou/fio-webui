@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { ansiToHtml } from '@/lib/ansi'
+import { StatsChart } from '@/components/StatsChart'
 import type {
   DefaultsResponse,
   FioConfig,
@@ -20,6 +21,8 @@ import type {
   JobConfig,
   OptionsResponse,
   RunState,
+  StatusUpdate,
+  StatsDataPoint,
   TaskValidationResponse,
   WsMessage,
 } from '@/types/api'
@@ -115,7 +118,7 @@ function buildTaskList(tasks: TaskDraft[]): FioTaskList {
 
 export default function App() {
   const [options, setOptions] = useState<OptionsResponse | null>(null)
-  const [global, setGlobal] = useState({
+  const [, setGlobal] = useState({
     ioengine: 'libaio',
     direct: true,
     runtime: 60,
@@ -127,9 +130,12 @@ export default function App() {
   const [tasks, setTasks] = useState<TaskDraft[]>([newTaskDraft({ name: 'task1' })])
   const [state, setState] = useState<RunState | null>(null)
   const [outputLines, setOutputLines] = useState<string[]>([])
+  const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
   const [backendOffline, setBackendOffline] = useState(false)
   const [wsReconnecting, setWsReconnecting] = useState(false)
   const [logPanelOpen, setLogPanelOpen] = useState(false)
+  const [statsPanelOpen, setStatsPanelOpen] = useState(false)
+  const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
   const outputEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -221,6 +227,14 @@ export default function App() {
               setOutputLines((prev) => [...prev.slice(-99), line])
             }
           }
+          if (msg.type === 'stats' && msg.data) {
+            const point = msg.data as StatsDataPoint
+            setStatsData((prev) => {
+              const newData = [...prev, point]
+              // Keep last 1000 data points to avoid memory issues
+              return newData.slice(-1000)
+            })
+          }
         } catch (_) {}
       }
 
@@ -254,6 +268,26 @@ export default function App() {
     }
   }, [])
 
+  // Load historical stats for the current run once on first render.
+  useEffect(() => {
+    let canceled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/stats')
+        if (!res.ok) return
+        const data = (await res.json()) as StatsDataPoint[]
+        if (!canceled && Array.isArray(data) && data.length > 0) {
+          setStatsData(data)
+        }
+      } catch {
+        // Best-effort only; realtime WebSocket updates will still work.
+      }
+    })()
+    return () => {
+      canceled = true
+    }
+  }, [])
+
   useEffect(() => {
     if (logPanelOpen) {
       outputEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -266,6 +300,7 @@ export default function App() {
     if (taskList.tasks.length === 0) return
     if (taskList.tasks.every((t) => t.jobs.length === 0)) return
     setOutputLines(['Starting test...'])
+    setStatsData([]) // Clear previous stats
     const res = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -552,6 +587,13 @@ export default function App() {
                   <Button onClick={stop} disabled={!run} variant="secondary">
                     Stop
                   </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setStatsPanelOpen(true)}
+                  >
+                    Status
+                  </Button>
                 </div>
               </div>
           </CardHeader>
@@ -576,7 +618,6 @@ export default function App() {
                 {tasks.map((task, taskIdx) => {
                   const taskJobs = task.jobs as JobDraft[]
                   const validationErrors = task._validationErrors
-                  const isValid = validationErrors ? validationErrors.valid : true
                   const hasErrors = validationErrors?.errors && validationErrors.errors.length > 0
                   
                   return (
@@ -985,6 +1026,87 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        </>
+      )}
+
+      {/* Stats panel overlay */}
+      {statsPanelOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm"
+            onClick={() => setStatsPanelOpen(false)}
+          />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <Card className="w-full max-w-5xl h-[80vh] flex flex-col">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <div>
+                  <CardTitle className="text-base font-medium">Run Status</CardTitle>
+                  <p className="text-xs text-muted-foreground">
+                    Real-time performance metrics for the current run
+                  </p>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setStatsPanelOpen(false)}>
+                  ×
+                </Button>
+              </CardHeader>
+              <CardContent className="flex-1 flex flex-col pt-0">
+                <div className="mb-3 flex gap-2 border-b border-border pb-2 text-xs">
+                  <button
+                    type="button"
+                    className={`px-3 py-1.5 rounded-md border ${
+                      statsTab === 'iops'
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-transparent hover:bg-muted/80'
+                    }`}
+                    onClick={() => setStatsTab('iops')}
+                  >
+                    IOPS
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-3 py-1.5 rounded-md border ${
+                      statsTab === 'bw'
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-transparent hover:bg-muted/80'
+                    }`}
+                    onClick={() => setStatsTab('bw')}
+                  >
+                    Bandwidth
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-3 py-1.5 rounded-md border ${
+                      statsTab === 'lat'
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-muted text-muted-foreground border-transparent hover:bg-muted/80'
+                    }`}
+                    onClick={() => setStatsTab('lat')}
+                  >
+                    Latency
+                  </button>
+                </div>
+                <div className="flex-1">
+                  {statsData.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                      No stats yet. Start a run to see real-time metrics.
+                    </div>
+                  ) : (
+                    <>
+                      {statsTab === 'iops' && (
+                        <StatsChart data={statsData} title="IOPS" type="iops" height={360} />
+                      )}
+                      {statsTab === 'bw' && (
+                        <StatsChart data={statsData} title="Bandwidth (MB/s)" type="bw" height={360} />
+                      )}
+                      {statsTab === 'lat' && (
+                        <StatsChart data={statsData} title="Latency (ms)" type="lat" height={360} />
+                      )}
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </>
       )}

@@ -3,6 +3,7 @@ package fio
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -40,9 +41,11 @@ type Executor struct {
 	// logWatcher   *LogWatcher
 	streamParser *StreamJSONParser
 	outputCh     chan string
+	statusCh     chan *StatusUpdate
 	cancel       context.CancelFunc
 	cmd          *exec.Cmd
 	WorkDir      string
+	statsMu      sync.Mutex
 }
 
 func NewExecutor(workDir string) *Executor {
@@ -55,6 +58,7 @@ func NewExecutor(workDir string) *Executor {
 		state: &RunState{
 			Status: StatusIdle,
 		},
+		statusCh: make(chan *StatusUpdate, 100),
 	}
 }
 
@@ -83,6 +87,22 @@ func (e *Executor) GetOutputChan() <-chan string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.outputCh
+}
+
+func (e *Executor) GetStatusChan() <-chan *StatusUpdate {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.statusCh
+}
+
+// GetCurrentRunID returns the ID of the currently tracked run, if any.
+func (e *Executor) GetCurrentRunID() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.state == nil {
+		return ""
+	}
+	return e.state.ID
 }
 
 func (e *Executor) Run(config *FioConfig) (*RunState, error) {
@@ -155,6 +175,9 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	}
 
 	e.outputCh = make(chan string, 100)
+	if e.statusCh == nil {
+		e.statusCh = make(chan *StatusUpdate, 100)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
@@ -195,7 +218,9 @@ func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
 	}
 
 	e.outputCh = make(chan string, 100)
-
+	if e.statusCh == nil {
+		e.statusCh = make(chan *StatusUpdate, 100)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
 	e.mu.Unlock()
@@ -318,8 +343,6 @@ func (e *Executor) runFioSequential(ctx context.Context, config *FioConfig, jobF
 // runFioParallel runs multiple fio commands in parallel
 func (e *Executor) runFioParallel(ctx context.Context, config *FioConfig, jobFiles []string, runID, logPrefix string) {
 	var wg sync.WaitGroup
-	errCh := make(chan error, len(jobFiles))
-
 	for i, jobFile := range jobFiles {
 		wg.Add(1)
 		go func(idx int, jf string) {
@@ -392,6 +415,26 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 	var output string
 	const maxOutputSize = 512 * 1024 // 512KB max output
 
+	// Forward status updates from stream parser to status channel and persist
+	// aggregated metrics for historical queries.
+	go func(curRunID string) {
+		for status := range e.streamParser.StatusChan() {
+			// Convert to aggregated stats point and append to history file.
+			if point := StatusToStatsDataPoint(status); point != nil {
+				e.appendStatsPoint(curRunID, point)
+			}
+
+			// Forward raw status update for real-time WebSocket consumers.
+			select {
+			case e.statusCh <- status:
+			case <-ctx.Done():
+				return
+			default:
+				// Channel full, skip
+			}
+		}
+	}(runID)
+
 	// Forward output from stream parser to output channel
 	go func() {
 		for line := range e.streamParser.OutputChan() {
@@ -401,6 +444,8 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 			// Send to channel for real-time updates
 			select {
 			case e.outputCh <- line:
+			case <-ctx.Done():
+				return
 			default:
 				// Channel full, skip
 			}
@@ -441,6 +486,76 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 		}
 		e.mu.Unlock()
 	}
+}
+
+// appendStatsPoint appends a single StatsDataPoint as a JSON line to the
+// per-run history file. Best-effort only; failures are logged in debug mode.
+func (e *Executor) appendStatsPoint(runID string, point *StatsDataPoint) {
+	if runID == "" || point == nil {
+		return
+	}
+
+	data, err := json.Marshal(point)
+	if err != nil {
+		if Debug {
+			log.Printf("[DEBUG] Failed to marshal stats point: %v", err)
+		}
+		return
+	}
+	data = append(data, '\n')
+
+	filename := filepath.Join(e.WorkDir, fmt.Sprintf("%s_stats.jsonl", runID))
+
+	e.statsMu.Lock()
+	defer e.statsMu.Unlock()
+
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		if Debug {
+			log.Printf("[DEBUG] Failed to open stats history file %s: %v", filename, err)
+		}
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Write(data); err != nil && Debug {
+		log.Printf("[DEBUG] Failed to write stats history to %s: %v", filename, err)
+	}
+}
+
+// GetStatsHistory reads the aggregated stats history for the given run ID.
+// It returns an empty slice when no history is available.
+func (e *Executor) GetStatsHistory(runID string) ([]StatsDataPoint, error) {
+	if runID == "" {
+		return []StatsDataPoint{}, nil
+	}
+
+	filename := filepath.Join(e.WorkDir, fmt.Sprintf("%s_stats.jsonl", runID))
+	f, err := os.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []StatsDataPoint{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+
+	var points []StatsDataPoint
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var p StatsDataPoint
+		if err := json.Unmarshal(scanner.Bytes(), &p); err != nil {
+			if Debug {
+				log.Printf("[DEBUG] Failed to unmarshal stats history line: %v", err)
+			}
+			continue
+		}
+		points = append(points, p)
+	}
+	if err := scanner.Err(); err != nil {
+		return points, err
+	}
+	return points, nil
 }
 
 type ValidationError struct {

@@ -81,3 +81,51 @@ export interface TaskValidationResponse {
   errors?: ValidationError[]
   warnings?: ValidationError[]
 }
+
+// Status update from fio --status-interval
+export interface Latency {
+  percentile: number
+  value: number // nanoseconds or microseconds
+}
+
+export interface IOStats {
+  iops: number
+  bw: number // bytes/sec
+  runtime: number // milliseconds
+  iostats?: Array<{ name: string; value: number }>
+  latency_ns?: Latency[]
+  latency_us?: Latency[]
+}
+
+export interface JobStatus {
+  jobname: string
+  groupid: number
+  error: number
+  eta: number
+  elapsed: number
+  read: IOStats
+  write: IOStats
+  trim?: IOStats
+  sync?: IOStats
+}
+
+export interface StatusUpdate {
+  time: number // Unix timestamp (seconds)
+  jobs: JobStatus[]
+  errors?: Record<string, unknown>
+}
+
+// Data point for charting
+export interface StatsDataPoint {
+  time: number // Unix timestamp (seconds)
+  iops: number
+  iopsRead: number
+  iopsWrite: number
+  bw: number // MB/s
+  bwRead: number // MB/s
+  bwWrite: number // MB/s
+  latMean: number // ms
+  latP50: number // ms
+  latP95: number // ms
+  latP99: number // ms
+}

@@ -74,6 +74,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/run", s.handleRun)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/status", s.handleStatus)
+	mux.HandleFunc("/api/stats", s.handleStatsHistory)
 	mux.HandleFunc("/api/events", s.handleWebSocket)
 	if s.debug {
 		mux.HandleFunc("/api/debug/files", s.handleDebugFiles)

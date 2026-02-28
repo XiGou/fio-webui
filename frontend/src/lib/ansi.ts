@@ -16,13 +16,13 @@ export function ansiToHtml(text: string): string {
   let currentSpan: string | null = null
   let classes = ''
 
-  const cleaned = text.replace(/\033\[2J/g, '').replace(/\033\[H/g, '')
-  const parts = cleaned.split(/(\033\[[0-9;]*m)/)
+  const cleaned = text.replace(/\x1b\[2J/g, '').replace(/\x1b\[H/g, '')
+  const parts = cleaned.split(/(\x1b\[[0-9;]*m)/)
 
   let html = ''
   for (const part of parts) {
-    if (part.match(/\033\[[\d;]*m/)) {
-      const match = part.match(/\033\[([0-9;]*)m/)
+    if (part.match(/\x1b\[[\d;]*m/)) {
+      const match = part.match(/\x1b\[([0-9;]*)m/)
       const codes = (match?.[1] ?? '').split(';')
       classes = ''
       for (const code of codes) {
