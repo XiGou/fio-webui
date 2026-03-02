@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, ClipboardList, History } from 'lucide-react'
+import { LayoutDashboard, ClipboardList, History, GitBranch } from 'lucide-react'
 
 export function Layout() {
   return (
@@ -52,6 +52,20 @@ export function Layout() {
               >
                 <ClipboardList className="h-4 w-4" />
                 预设负载
+              </NavLink>
+              <NavLink
+                to="/github-actions"
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )
+                }
+              >
+                <GitBranch className="h-4 w-4" />
+                Actions 队列
               </NavLink>
             </nav>
           </div>
