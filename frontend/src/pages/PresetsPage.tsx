@@ -1,14 +1,35 @@
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { PRESETS, type PresetWorkload } from '../data/presets'
-import { ClipboardList, HardDrive, Shuffle, Layers } from 'lucide-react'
+import { loadUserPresets, removeUserPreset, updateUserPreset } from '../lib/userPresets'
+import {
+  Brain,
+  Box,
+  ClipboardList,
+  Cpu,
+  Database,
+  FileText,
+  Globe,
+  HardDrive,
+  Layers,
+  Shuffle,
+} from 'lucide-react'
 
 const CATEGORY_LABEL: Record<PresetWorkload['category'], string> = {
   random: '随机 I/O',
   sequential: '顺序 I/O',
   mixed: '混合读写',
   comprehensive: '综合测试',
+  database: '数据库',
+  kv: 'KV / 缓存',
+  logging: '日志 / 追加写',
+  docker: '容器 / 镜像',
+  ci: 'CI / 构建系统',
+  ai: 'AI / ML',
+  web: 'Web 应用',
+  user: '我的预设',
 }
 
 const CATEGORY_ICON: Record<PresetWorkload['category'], React.ReactNode> = {
@@ -16,16 +37,45 @@ const CATEGORY_ICON: Record<PresetWorkload['category'], React.ReactNode> = {
   sequential: <HardDrive className="h-4 w-4" />,
   mixed: <Layers className="h-4 w-4" />,
   comprehensive: <ClipboardList className="h-4 w-4" />,
+  database: <Database className="h-4 w-4" />,
+  kv: <Box className="h-4 w-4" />,
+  logging: <FileText className="h-4 w-4" />,
+  docker: <Cpu className="h-4 w-4" />,
+  ci: <ClipboardList className="h-4 w-4" />,
+  ai: <Brain className="h-4 w-4" />,
+  web: <Globe className="h-4 w-4" />,
+  user: <ClipboardList className="h-4 w-4" />,
 }
 
 export function PresetsPage() {
+  const [userPresets, setUserPresets] = useState<PresetWorkload[]>([])
   const navigate = useNavigate()
+
+  useEffect(() => {
+    setUserPresets(loadUserPresets())
+  }, [])
+
+  const allPresets: PresetWorkload[] = [...PRESETS, ...userPresets]
 
   const applyPreset = (preset: PresetWorkload) => {
     navigate('/', { state: { preset }, replace: false })
   }
 
-  const grouped = PRESETS.reduce<Record<PresetWorkload['category'], PresetWorkload[]>>(
+  const handleDeletePreset = (id: string) => {
+    const next = removeUserPreset(id)
+    setUserPresets(next)
+  }
+
+  const handleRenamePreset = (preset: PresetWorkload) => {
+    const nameDefault = preset.name
+    // eslint-disable-next-line no-alert
+    const nextName = window.prompt('新的预设名称', nameDefault)
+    if (!nextName || nextName.trim() === preset.name) return
+    const next = updateUserPreset(preset.id, { name: nextName.trim() })
+    setUserPresets(next)
+  }
+
+  const grouped = allPresets.reduce<Record<PresetWorkload['category'], PresetWorkload[]>>(
     (acc: Record<PresetWorkload['category'], PresetWorkload[]>, p: PresetWorkload) => {
       if (!acc[p.category]) acc[p.category] = []
       acc[p.category].push(p)
@@ -34,7 +84,20 @@ export function PresetsPage() {
     {} as Record<PresetWorkload['category'], PresetWorkload[]>
   )
 
-  const order: PresetWorkload['category'][] = ['random', 'sequential', 'mixed', 'comprehensive']
+  const order: PresetWorkload['category'][] = [
+    'random',
+    'sequential',
+    'mixed',
+    'comprehensive',
+    'database',
+    'kv',
+    'logging',
+    'docker',
+    'ci',
+    'ai',
+    'web',
+    'user',
+  ]
 
   return (
     <div className="space-y-8">
@@ -61,7 +124,17 @@ export function PresetsPage() {
               <CardContent>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {items.map((preset: PresetWorkload) => (
-                    <PresetCard key={preset.id} preset={preset} onApply={() => applyPreset(preset)} />
+                    <PresetCard
+                      key={preset.id}
+                      preset={preset}
+                      onApply={() => applyPreset(preset)}
+                      onDelete={
+                        preset.id.startsWith('user-') ? () => handleDeletePreset(preset.id) : undefined
+                      }
+                      onRename={
+                        preset.id.startsWith('user-') ? () => handleRenamePreset(preset) : undefined
+                      }
+                    />
                   ))}
                 </div>
               </CardContent>
@@ -73,7 +146,17 @@ export function PresetsPage() {
   )
 }
 
-function PresetCard({ preset, onApply }: { preset: PresetWorkload; onApply: () => void }) {
+function PresetCard({
+  preset,
+  onApply,
+  onDelete,
+  onRename,
+}: {
+  preset: PresetWorkload
+  onApply: () => void
+  onDelete?: () => void
+  onRename?: () => void
+}) {
   return (
     <div className="flex flex-col rounded-lg border border-border bg-card p-4 transition-colors hover:border-primary/50 hover:bg-muted/30">
       <div className="flex-1">
@@ -89,6 +172,32 @@ function PresetCard({ preset, onApply }: { preset: PresetWorkload; onApply: () =
       <Button className="mt-4 w-full" variant="outline" size="sm" onClick={onApply}>
         使用此预设
       </Button>
+      {(onDelete || onRename) && (
+        <div className="mt-2 flex justify-end gap-2">
+          {onRename && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={onRename}
+            >
+              重命名
+            </Button>
+          )}
+          {onDelete && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 px-2 text-xs text-destructive"
+              onClick={onDelete}
+            >
+              删除
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

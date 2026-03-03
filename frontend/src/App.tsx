@@ -18,6 +18,7 @@ import { Layout } from '@/components/Layout'
 import { PresetsPage } from '@/pages/PresetsPage'
 import { HistoryPage } from '@/pages/HistoryPage'
 import type { PresetWorkload } from './data/presets'
+import { addUserPreset, buildConfigSummaryFromJobs } from './lib/userPresets'
 import type {
   DefaultsResponse,
   FioConfig,
@@ -487,6 +488,49 @@ export default function App() {
   const runningLabel = useMemo(() => (state ? STATUS_LABEL[state.status] ?? state.status : 'Idle'), [state])
 
   // Task operations
+  const saveTaskAsPreset = (taskId: string) => {
+    const task = tasks.find((t) => t._id === taskId)
+    if (!task) return
+    const jobDrafts = task.jobs as JobDraft[]
+    if (jobDrafts.length === 0) return
+
+    const nameDefault = task.name?.trim() || `task-${new Date().toLocaleString()}`
+    // eslint-disable-next-line no-alert
+    const name = window.prompt('预设名称（将出现在“预设负载”页面）', nameDefault)
+    if (!name) return
+
+    const jobs = jobDrafts.map((j) => ({
+      name: j.name,
+      filename: j.filename,
+      rw: j.rw,
+      bs: j.bs,
+      size: j.size,
+      numjobs: j.numjobs,
+      iodepth: j.iodepth,
+      rwmixread: j.rwmixread,
+      rate: j.rate,
+      stonewallAfter: j._stonewallAfter ?? false,
+      runtime: j.runtime,
+      ioengine: j.ioengine,
+    }))
+
+    const preset: PresetWorkload = {
+      id: `user-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: name.trim(),
+      description: '用户自定义预设（从配置页面保存，可在“预设负载”中再次使用）。',
+      category: 'user',
+      configSummary: buildConfigSummaryFromJobs(jobs),
+      stonewallBetweenJobs: jobs.some((j) => j.stonewallAfter),
+      task: {
+        name: name.trim(),
+        global: task.global,
+        jobs,
+      },
+    }
+
+    addUserPreset(preset)
+  }
+
   const toggleTaskCollapse = (taskId: string) => {
     setTasks((prev) => prev.map((t) => (t._id === taskId ? { ...t, _collapsed: !t._collapsed } : t)))
   }
@@ -768,28 +812,71 @@ export default function App() {
                         <div className="flex items-center gap-0.5">
                           <Button
                             type="button"
-                            variant="ghost"
+                            variant="secondary"
                             size="sm"
-                            className="h-7 px-2 text-xs"
+                            className="h-7 px-3 text-xs"
                             onClick={() => validateTask(task._id)}
                             disabled={task._validating || taskJobs.length === 0}
                             title="Validate configuration"
                           >
                             {task._validating ? '...' : '✓ Test'}
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveTask(task._id, -1)} disabled={taskIdx === 0}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 px-3 text-xs"
+                            onClick={() => saveTaskAsPreset(task._id)}
+                            title="保存为自定义预设（在“预设负载”页面查看与复用）"
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => moveTask(task._id, -1)}
+                            disabled={taskIdx === 0}
+                          >
                             ↑
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => moveTask(task._id, 1)} disabled={taskIdx === tasks.length - 1}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            onClick={() => moveTask(task._id, 1)}
+                            disabled={taskIdx === tasks.length - 1}
+                          >
                             ↓
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => duplicateTask(task._id)}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => duplicateTask(task._id)}
+                          >
                             Copy
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => addTaskAfter(task._id, { name: `task${tasks.length + 1}` })}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => addTaskAfter(task._id, { name: `task${tasks.length + 1}` })}
+                          >
                             + After
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => removeTask(task._id)} disabled={tasks.length === 1}>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => removeTask(task._id)}
+                            disabled={tasks.length === 1}
+                          >
                             Remove
                           </Button>
                         </div>
