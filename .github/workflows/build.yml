@@ -33,15 +33,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: linux
+          - os: ubuntu-latest
             goos: linux
             goarch: amd64
             suffix: linux-amd64
-          - os: linux
+          - os: ubuntu-latest
             goos: linux
             goarch: arm64
             suffix: linux-arm64
-          - os: linux
+          - os: ubuntu-latest
             goos: linux
             goarch: arm
             suffix: linux-arm
