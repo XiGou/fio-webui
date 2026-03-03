@@ -17,7 +17,6 @@ import { StatsChart } from '@/components/StatsChart'
 import { Layout } from '@/components/Layout'
 import { PresetsPage } from '@/pages/PresetsPage'
 import { HistoryPage } from '@/pages/HistoryPage'
-import { GitHubActionsPage } from '@/pages/GitHubActionsPage'
 import type { PresetWorkload } from './data/presets'
 import type {
   DefaultsResponse,
@@ -1265,7 +1264,6 @@ export default function App() {
         />
         <Route path="history" element={<HistoryPage />} />
         <Route path="presets" element={<PresetsPage />} />
-        <Route path="github-actions" element={<GitHubActionsPage />} />
       </Route>
     </Routes>
   )

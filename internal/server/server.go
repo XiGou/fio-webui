@@ -71,7 +71,6 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/events", s.handleWebSocket)
 	mux.HandleFunc("/api/runs", s.handleRuns)
 	mux.HandleFunc("/api/runs/", s.handleRuns)
-	mux.HandleFunc("/api/github-actions", s.handleGitHubActionsStatus)
 	if s.debug {
 		mux.HandleFunc("/api/debug/files", s.handleDebugFiles)
 		log.Println("Debug mode enabled")
