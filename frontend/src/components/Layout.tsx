@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { cn } from '@/lib/utils'
-import { LayoutDashboard, ClipboardList, History } from 'lucide-react'
+import { Boxes, History, ListTree } from 'lucide-react'
 
 export function Layout() {
   return (
@@ -22,8 +22,22 @@ export function Layout() {
                   )
                 }
               >
-                <LayoutDashboard className="h-4 w-4" />
-                任务
+                <Boxes className="h-4 w-4" />
+                工作流工作台
+              </NavLink>
+              <NavLink
+                to="/legacy"
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )
+                }
+              >
+                <ListTree className="h-4 w-4" />
+                传统配置（Legacy）
               </NavLink>
               <NavLink
                 to="/history"
@@ -37,21 +51,7 @@ export function Layout() {
                 }
               >
                 <History className="h-4 w-4" />
-                历史
-              </NavLink>
-              <NavLink
-                to="/presets"
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                    isActive
-                      ? 'bg-primary/10 text-primary'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  )
-                }
-              >
-                <ClipboardList className="h-4 w-4" />
-                预设负载
+                任务管理
               </NavLink>
             </nav>
           </div>
