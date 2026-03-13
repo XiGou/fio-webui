@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Canvas } from '@/components/workflow/Canvas'
 import fioParameters from '@/data/fio-parameters.json'
+import { taskListToWorkflow } from '@/lib/workflowMapper'
+import { WORKFLOW_NODE_TYPE } from '@/types/workflow'
 import type { WorkflowCanvasEdge } from '@/components/workflow/EdgeRenderer'
 import type { WorkflowCanvasNode, WorkflowNodeKind } from '@/components/workflow/NodeRenderer'
 import type { FioTask, FioTaskList, GlobalConfig, JobConfig, RunState } from '@/types/api'
@@ -307,7 +309,51 @@ export function WorkflowStudioPage() {
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null)
   const [runError, setRunError] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const location = useLocation()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    const restoreRunConfig = location.state?.restoreRunConfig as FioTaskList | undefined
+    if (!restoreRunConfig?.tasks?.length) return
+    const mapped = taskListToWorkflow(restoreRunConfig)
+    const restoredNodes: WorkflowCanvasNode[] = [
+      { id: 'start-restore', type: 'start', position: { x: 80, y: 120 }, data: { label: '开始' } },
+      ...mapped.nodes.map((node, index) => {
+        if (node.type === WORKFLOW_NODE_TYPE.CONTROL_STONEWALL) {
+          return {
+            id: `restore-${node.id}`,
+            type: 'barrier' as const,
+            position: { x: 280 + index * 220, y: 120 },
+            data: { label: node.label ?? 'stonewall', stonewall: true, phase: node.label ?? 'stonewall' },
+          }
+        }
+        const cfg = node.config as { taskName?: string; job?: JobConfig }
+        return {
+          id: `restore-${node.id}`,
+          type: 'fioJob' as const,
+          position: { x: 280 + index * 220, y: 120 },
+          data: {
+            label: node.label ?? `恢复节点-${index + 1}`,
+            taskName: cfg.taskName,
+            ...(cfg.job ?? {}),
+          },
+        }
+      }),
+      { id: 'end-restore', type: 'end', position: { x: 280 + mapped.nodes.length * 220, y: 120 }, data: { label: '结束' } },
+    ]
+    const restoredEdges: WorkflowCanvasEdge[] = restoredNodes.slice(1).map((node, index) => ({
+      id: `restore-edge-${index}`,
+      source: restoredNodes[index].id,
+      target: node.id,
+    }))
+    setNodes(restoredNodes)
+    setEdges(restoredEdges)
+    setSelectedNodeIds([])
+    setSelectedEdgeIds([])
+    setCompileResult(null)
+    setValidation({ errors: [], invalidNodeIds: new Set(), invalidEdgeIds: new Set() })
+    navigate('/', { replace: true, state: {} })
+  }, [location.state, navigate])
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
