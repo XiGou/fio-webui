@@ -13,12 +13,12 @@ import (
 
 // RunMeta holds metadata for a recorded run
 type RunMeta struct {
-	ID        string   `json:"id"`
-	Status    string   `json:"status"`
-	StartTime string   `json:"start_time"`
-	EndTime   string   `json:"end_time,omitempty"`
-	Error     string   `json:"error,omitempty"`
-	DiskBytes int64    `json:"disk_bytes"`
+	ID        string      `json:"id"`
+	Status    string      `json:"status"`
+	StartTime string      `json:"start_time"`
+	EndTime   string      `json:"end_time,omitempty"`
+	Error     string      `json:"error,omitempty"`
+	DiskBytes int64       `json:"disk_bytes"`
 	Summary   *RunSummary `json:"summary,omitempty"`
 }
 
@@ -39,7 +39,7 @@ type RunSummary struct {
 // LogSummary holds parsed log summary and errors for frontend display
 type LogSummary struct {
 	Summary string   `json:"summary"` // Human-readable summary (key stats)
-	Errors  []string `json:"errors"`   // Error lines only
+	Errors  []string `json:"errors"`  // Error lines only
 }
 
 // RunStore manages persisted run records under a base directory
@@ -138,18 +138,37 @@ func (s *RunStore) GetMeta(runID string) (*RunMeta, error) {
 	return &meta, nil
 }
 
-// GetConfig reads config.json and unmarshals into the given type
+// GetConfig reads config.json and returns the legacy task list view.
+// It supports both legacy FioTaskList and the newer RunConfig schema.
 func (s *RunStore) GetConfig(runID string) (*FioTaskList, error) {
+	runConfig, err := s.GetRunConfig(runID)
+	if err != nil {
+		return nil, err
+	}
+	if runConfig.TaskList != nil {
+		return runConfig.TaskList, nil
+	}
+	return &FioTaskList{}, nil
+}
+
+// GetRunConfig reads config.json and unmarshals new/legacy formats.
+func (s *RunStore) GetRunConfig(runID string) (*RunConfig, error) {
 	dir := s.RunDir(runID)
 	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
 		return nil, err
 	}
+
+	var runConfig RunConfig
+	if err := json.Unmarshal(data, &runConfig); err == nil && (runConfig.TaskList != nil || runConfig.Workflow != nil) {
+		return &runConfig, nil
+	}
+
 	var cfg FioTaskList
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	return &cfg, nil
+	return &RunConfig{TaskList: &cfg, Workflow: BuildWorkflowFromTaskList(&cfg)}, nil
 }
 
 // GetLogSummary parses output.log and returns summary + errors only

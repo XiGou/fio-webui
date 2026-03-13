@@ -43,7 +43,7 @@ type Executor struct {
 	statusCh     chan *StatusUpdate
 	cancel       context.CancelFunc
 	cmd          *exec.Cmd
-	WorkDir      string   // scratch for validate etc
+	WorkDir      string    // scratch for validate etc
 	RunStore     *RunStore // persistent run records
 	lastStats    *StatsDataPoint
 	statsMu      sync.Mutex
@@ -128,8 +128,9 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 			e.mu.Unlock()
 			return nil, fmt.Errorf("create run dir: %w", err)
 		}
-		taskList := FioTaskList{Tasks: []FioTask{{Name: "task1", Global: config.Global, Jobs: config.Jobs}}}
-		if err := e.RunStore.SaveConfig(runID, &taskList); err != nil {
+		taskList := &FioTaskList{Tasks: []FioTask{{Name: "task1", Global: config.Global, Jobs: config.Jobs}}}
+		runConfig := &RunConfig{TaskList: taskList, Workflow: BuildWorkflowFromTaskList(taskList)}
+		if err := e.RunStore.SaveConfig(runID, runConfig); err != nil {
 			if Debug {
 				log.Printf("[DEBUG] SaveConfig: %v", err)
 			}
@@ -238,7 +239,9 @@ func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
 			e.mu.Unlock()
 			return nil, fmt.Errorf("create run dir: %w", err)
 		}
-		if err := e.RunStore.SaveConfig(runID, &FioTaskList{Tasks: tasks}); err != nil && Debug {
+		taskList := &FioTaskList{Tasks: tasks}
+		runConfig := &RunConfig{TaskList: taskList, Workflow: BuildWorkflowFromTaskList(taskList)}
+		if err := e.RunStore.SaveConfig(runID, runConfig); err != nil && Debug {
 			log.Printf("[DEBUG] SaveConfig: %v", err)
 		}
 	}
@@ -632,8 +635,8 @@ type ValidationError struct {
 }
 
 type ValidationResult struct {
-	Valid   bool             `json:"valid"`
-	Errors  []ValidationError `json:"errors,omitempty"`
+	Valid    bool              `json:"valid"`
+	Errors   []ValidationError `json:"errors,omitempty"`
 	Warnings []ValidationError `json:"warnings,omitempty"`
 }
 
