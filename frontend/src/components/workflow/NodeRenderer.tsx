@@ -57,7 +57,10 @@ export function NodeRenderer({
     >
       <div
         className="absolute -left-2 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border border-border bg-background"
-        onPointerUp={() => onCompleteConnect(node.id)}
+        onPointerDown={(event) => {
+          event.stopPropagation()
+          onCompleteConnect(node.id)
+        }}
       />
       <div
         className="absolute -right-2 top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border border-border bg-background"

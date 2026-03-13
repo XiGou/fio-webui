@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Canvas } from '@/components/workflow/Canvas'
 import fioParameters from '@/data/fio-parameters.json'
@@ -34,29 +34,72 @@ const FIO_GROUPS = fioParameters.groups as FioParamGroup[]
 const NODE_PRESETS: NodePreset[] = [
   { id: 'custom-start', name: 'StartNode', description: '工作流起点', kind: 'start', category: '自定义' },
   { id: 'custom-end', name: 'EndNode', description: '工作流终点', kind: 'end', category: '自定义' },
-  { id: 'custom-fio', name: 'FioJobNode', description: '可自定义 fio job 参数', kind: 'fioJob', category: '自定义', defaults: { rw: 'read', bs: '4k', iodepth: 1 } },
-  { id: 'custom-barrier', name: 'BarrierNode', description: 'stonewall / 阶段切换', kind: 'barrier', category: '自定义', defaults: { stonewall: true, phase: 'phase-1' } },
-  { id: 'preset-seq-read', name: '顺序读 128k', description: '常用预设：吞吐型顺序读', kind: 'fioJob', category: '预设', defaults: { label: '顺序读 128k', rw: 'read', bs: '128k', iodepth: 32, numjobs: 1, ioengine: 'io_uring', direct: true } },
-  { id: 'preset-rand-read', name: '随机读 4k', description: '常用预设：低延迟随机读', kind: 'fioJob', category: '预设', defaults: { label: '随机读 4k', rw: 'randread', bs: '4k', iodepth: 64, numjobs: 4, ioengine: 'io_uring', direct: true } },
-  { id: 'preset-rand-write', name: '随机写 4k', description: '常用预设：随机写压测', kind: 'fioJob', category: '预设', defaults: { label: '随机写 4k', rw: 'randwrite', bs: '4k', iodepth: 32, numjobs: 4, ioengine: 'io_uring', direct: true } },
-  { id: 'preset-mix', name: '70/30 混合读写', description: '常用预设：数据库类混合负载', kind: 'fioJob', category: '预设', defaults: { label: '混合读写 70/30', rw: 'randrw', rwmixread: 70, bs: '8k', iodepth: 32, numjobs: 2, ioengine: 'io_uring', direct: true } },
-  { id: 'preset-qd1-lat', name: 'QD1 延迟测试', description: '常用预设：低队列深度延迟', kind: 'fioJob', category: '预设', defaults: { label: 'QD1 延迟测试', rw: 'randread', bs: '4k', iodepth: 1, runtime: 60, time_based: true } }
+  {
+    id: 'custom-fio',
+    name: 'FioJobNode',
+    description: '可自定义 fio job 参数',
+    kind: 'fioJob',
+    category: '自定义',
+    defaults: { rw: 'read', bs: '4k', iodepth: 1 },
+  },
+  {
+    id: 'custom-barrier',
+    name: 'BarrierNode',
+    description: 'stonewall / 阶段切换',
+    kind: 'barrier',
+    category: '自定义',
+    defaults: { stonewall: true, phase: 'phase-1' },
+  },
+  {
+    id: 'preset-seq-read',
+    name: '顺序读 128k',
+    description: '常用预设：吞吐型顺序读',
+    kind: 'fioJob',
+    category: '预设',
+    defaults: { label: '顺序读 128k', rw: 'read', bs: '128k', iodepth: 32, numjobs: 1, ioengine: 'io_uring', direct: true },
+  },
+  {
+    id: 'preset-rand-read',
+    name: '随机读 4k',
+    description: '常用预设：低延迟随机读',
+    kind: 'fioJob',
+    category: '预设',
+    defaults: { label: '随机读 4k', rw: 'randread', bs: '4k', iodepth: 64, numjobs: 4, ioengine: 'io_uring', direct: true },
+  },
+  {
+    id: 'preset-rand-write',
+    name: '随机写 4k',
+    description: '常用预设：随机写压测',
+    kind: 'fioJob',
+    category: '预设',
+    defaults: { label: '随机写 4k', rw: 'randwrite', bs: '4k', iodepth: 32, numjobs: 4, ioengine: 'io_uring', direct: true },
+  },
+  {
+    id: 'preset-mix',
+    name: '70/30 混合读写',
+    description: '常用预设：数据库类混合负载',
+    kind: 'fioJob',
+    category: '预设',
+    defaults: { label: '混合读写 70/30', rw: 'randrw', rwmixread: 70, bs: '8k', iodepth: 32, numjobs: 2, ioengine: 'io_uring', direct: true },
+  },
 ]
 
-const createNode = (preset: NodePreset, index: number): WorkflowCanvasNode => {
-  const type = preset.kind
-  const id = `${type}-${Math.random().toString(36).slice(2, 8)}`
-  const baseData = { label: `${preset.name}-${index + 1}` }
-  return {
-    id,
-    type,
-    position: { x: 80 + index * 42, y: 80 + index * 34 },
-    data: {
-      ...baseData,
-      ...(preset.defaults ?? {})
-    }
-  }
+const nextId = (prefix: string) => {
+  const uid = typeof globalThis.crypto?.randomUUID === 'function'
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return `${prefix}-${uid}`
 }
+
+const createNode = (preset: NodePreset, index: number): WorkflowCanvasNode => ({
+  id: nextId(preset.kind),
+  type: preset.kind,
+  position: { x: 80 + index * 42, y: 80 + index * 34 },
+  data: {
+    label: `${preset.name}-${index + 1}`,
+    ...(preset.defaults ?? {}),
+  },
+})
 
 const isConnectionLegal = (source: WorkflowCanvasNode | undefined, target: WorkflowCanvasNode | undefined) => {
   if (!source || !target) return false
@@ -70,7 +113,6 @@ const validateTopology = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge
   const errors: string[] = []
   const invalidNodeIds = new Set<string>()
   const invalidEdgeIds = new Set<string>()
-
   const inDegree = new Map<string, number>()
   const outDegree = new Map<string, number>()
   const adjacency = new Map<string, string[]>()
@@ -122,7 +164,6 @@ const validateTopology = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge
   nodes.forEach((node) => {
     const inCount = inDegree.get(node.id) ?? 0
     const outCount = outDegree.get(node.id) ?? 0
-
     if (node.type === 'start' && inCount > 0) {
       errors.push(`StartNode ${node.id} 不能有入边。`)
       invalidNodeIds.add(node.id)
@@ -139,7 +180,6 @@ const validateTopology = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge
 
   const visiting = new Set<string>()
   const visited = new Set<string>()
-
   const dfs = (nodeId: string) => {
     if (visiting.has(nodeId)) {
       invalidNodeIds.add(nodeId)
@@ -152,7 +192,6 @@ const validateTopology = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge
     visiting.delete(nodeId)
     visited.add(nodeId)
   }
-
   nodes.forEach((node) => dfs(node.id))
 
   return { errors: Array.from(new Set(errors)), invalidNodeIds, invalidEdgeIds }
@@ -166,11 +205,11 @@ export function WorkflowStudioPage() {
   const [nodes, setNodes] = useState<WorkflowCanvasNode[]>([
     { id: 'start-1', type: 'start', position: { x: 80, y: 120 }, data: { label: '开始' } },
     { id: 'fio-1', type: 'fioJob', position: { x: 360, y: 120 }, data: { label: '顺序读', rw: 'read', bs: '128k', iodepth: 1 } },
-    { id: 'end-1', type: 'end', position: { x: 650, y: 120 }, data: { label: '结束' } }
+    { id: 'end-1', type: 'end', position: { x: 650, y: 120 }, data: { label: '结束' } },
   ])
   const [edges, setEdges] = useState<WorkflowCanvasEdge[]>([
     { id: 'edge-1', source: 'start-1', target: 'fio-1' },
-    { id: 'edge-2', source: 'fio-1', target: 'end-1' }
+    { id: 'edge-2', source: 'fio-1', target: 'end-1' },
   ])
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
   const [validation, setValidation] = useState<ValidationResult>({ errors: [], invalidNodeIds: new Set(), invalidEdgeIds: new Set() })
@@ -196,22 +235,15 @@ export function WorkflowStudioPage() {
     [nodes, selectedNodeIds]
   )
 
-
   const visiblePresets = useMemo(() => {
     const keyword = librarySearch.trim().toLowerCase()
     if (!keyword) return NODE_PRESETS
-    return NODE_PRESETS.filter((preset) =>
-      `${preset.name} ${preset.description} ${preset.category}`.toLowerCase().includes(keyword)
-    )
+    return NODE_PRESETS.filter((preset) => `${preset.name} ${preset.description} ${preset.category}`.toLowerCase().includes(keyword))
   }, [librarySearch])
 
   const updateSelectedNodeData = (field: string, value: string | number | boolean) => {
     if (!selectedNode) return
-    setNodes((previous) =>
-      previous.map((node) =>
-        node.id === selectedNode.id ? { ...node, data: { ...node.data, [field]: value } } : node
-      )
-    )
+    setNodes((previous) => previous.map((node) => (node.id === selectedNode.id ? { ...node, data: { ...node.data, [field]: value } } : node)))
   }
 
   const canConnect = (sourceId: string, targetId: string) => {
@@ -227,11 +259,7 @@ export function WorkflowStudioPage() {
       return (
         <label key={field.key} className="flex items-center justify-between gap-3 rounded border border-border px-2 py-1 text-xs">
           <span>{field.label}</span>
-          <input
-            type="checkbox"
-            checked={Boolean(value)}
-            onChange={(event) => updateSelectedNodeData(field.key, event.target.checked)}
-          />
+          <input type="checkbox" checked={Boolean(value)} onChange={(event) => updateSelectedNodeData(field.key, event.target.checked)} />
         </label>
       )
     }
@@ -240,11 +268,7 @@ export function WorkflowStudioPage() {
       return (
         <label key={field.key} className="space-y-1 text-xs">
           <span className="text-muted-foreground">{field.label}</span>
-          <select
-            className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-            value={String(value ?? '')}
-            onChange={(event) => updateSelectedNodeData(field.key, event.target.value)}
-          >
+          <select className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs" value={String(value ?? '')} onChange={(event) => updateSelectedNodeData(field.key, event.target.value)}>
             <option value="">未设置</option>
             {(field.options ?? []).map((option) => (
               <option key={option} value={option}>{option}</option>
@@ -261,9 +285,7 @@ export function WorkflowStudioPage() {
           type={field.type === 'number' ? 'number' : 'text'}
           value={String(value ?? '')}
           placeholder={field.placeholder}
-          onChange={(event) =>
-            updateSelectedNodeData(field.key, field.type === 'number' ? Number(event.target.value || 0) : event.target.value)
-          }
+          onChange={(event) => updateSelectedNodeData(field.key, field.type === 'number' ? Number(event.target.value || 0) : event.target.value)}
         />
       </label>
     )
@@ -287,99 +309,77 @@ export function WorkflowStudioPage() {
             </div>
             <Button size="sm" variant="outline" onClick={() => setLibraryOpen((v) => !v)}>{libraryOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} 节点库</Button>
             <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
-            <Button
-              size="sm"
-              onClick={() => setValidation(validateTopology(nodes, edges))}
-            >
-              运行前拓扑校验
-            </Button>
+            <Button size="sm" onClick={() => setValidation(validateTopology(nodes, edges))}>运行前拓扑校验</Button>
           </div>
         </CardHeader>
       </Card>
 
-      <div className="grid min-h-[calc(100vh-190px)] grid-cols-12 gap-3">
+      <div className="relative h-[calc(100vh-190px)] min-h-[620px] rounded-md border border-border bg-background p-2">
+        <Canvas
+          nodes={nodes}
+          edges={edges}
+          selectedNodeIds={selectedNodeIds}
+          invalidNodeIds={validation.invalidNodeIds}
+          invalidEdgeIds={validation.invalidEdgeIds}
+          onNodeMove={(nodeId, nextPosition) =>
+            setNodes((previous) => previous.map((node) => (node.id === nodeId ? { ...node, position: nextPosition } : node)))
+          }
+          onSelectionChange={(ids) => {
+            setSelectedNodeIds(ids)
+            if (ids.length > 0) setPropertyOpen(true)
+          }}
+          canConnect={canConnect}
+          onConnect={(source, target) => {
+            setEdges((previous) => [...previous, { id: nextId('edge'), source, target }])
+          }}
+        />
+
         {libraryOpen ? (
-          <Card className="col-span-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">节点库</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="relative">
+          <div className="absolute left-4 top-4 z-20 h-[calc(100%-2rem)] w-[320px] rounded-md border border-border bg-background/95 shadow-lg backdrop-blur-sm">
+            <div className="flex h-full flex-col p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-medium">节点库</p>
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setLibraryOpen(false)}>收起</Button>
+              </div>
+              <div className="relative mb-3">
                 <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
                 <Input className="pl-8" placeholder="搜索预设或自定义节点" value={librarySearch} onChange={(event) => setLibrarySearch(event.target.value)} />
               </div>
-              <div className="max-h-[calc(100vh-320px)] space-y-2 overflow-auto">
+              <div className="space-y-2 overflow-auto pr-1">
                 {visiblePresets.map((preset) => (
-                  <button
-                    key={preset.id}
-                    className="w-full rounded-md border border-border px-3 py-2 text-left hover:bg-muted"
-                    onClick={() => setNodes((previous) => [...previous, createNode(preset, previous.length)])}
-                  >
+                  <button key={preset.id} className="w-full rounded-md border border-border px-3 py-2 text-left hover:bg-muted" onClick={() => setNodes((previous) => [...previous, createNode(preset, previous.length)])}>
                     <p className="text-xs text-muted-foreground">{preset.category}</p>
                     <p className="text-sm font-medium">+ {preset.name}</p>
                     <p className="text-xs text-muted-foreground">{preset.description}</p>
                   </button>
                 ))}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         ) : null}
 
-        <Card className={`${libraryOpen && propertyOpen ? 'col-span-6' : 'col-span-12'}`}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">画布</CardTitle>
-          </CardHeader>
-          <CardContent className="h-[calc(100vh-270px)] p-2">
-            <Canvas
-              nodes={nodes}
-              edges={edges}
-              selectedNodeIds={selectedNodeIds}
-              invalidNodeIds={validation.invalidNodeIds}
-              invalidEdgeIds={validation.invalidEdgeIds}
-              onNodeMove={(nodeId, nextPosition) =>
-                setNodes((previous) =>
-                  previous.map((node) => (node.id === nodeId ? { ...node, position: nextPosition } : node))
-                )
-              }
-              onSelectionChange={(ids) => {
-                setSelectedNodeIds(ids)
-                if (ids.length > 0) setPropertyOpen(true)
-              }}
-              canConnect={canConnect}
-              onConnect={(source, target) => {
-                setEdges((previous) => [
-                  ...previous,
-                  { id: `edge-${crypto.randomUUID()}`, source, target },
-                ])
-              }}
-            />
-          </CardContent>
-        </Card>
-
         {propertyOpen ? (
-          <Card className="col-span-3">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">属性面板</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
+          <div className="absolute right-4 top-4 z-20 h-[calc(100%-2rem)] w-[360px] rounded-md border border-border bg-background/95 shadow-lg backdrop-blur-sm">
+            <div className="h-full overflow-auto p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm font-medium">属性面板</p>
+                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setPropertyOpen(false)}>收起</Button>
+              </div>
               {!selectedNode ? (
-                <p className="rounded-md border border-dashed border-border p-3 text-muted-foreground">请选择单个节点后编辑参数。</p>
+                <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">请选择单个节点后编辑参数。</p>
               ) : (
                 <>
-                  <div className="space-y-2 rounded-md border border-border p-3">
+                  <div className="mb-3 space-y-2 rounded-md border border-border p-3">
                     <p className="text-xs text-muted-foreground">节点基础信息</p>
                     <Input value={String(selectedNode.data.label ?? '')} onChange={(event) => updateSelectedNodeData('label', event.target.value)} />
                   </div>
 
                   {selectedNode.type === 'fioJob' ? (
-                    <div className="space-y-2 rounded-md border border-border p-3">
+                    <div className="mb-3 space-y-2 rounded-md border border-border p-3">
                       <p className="text-xs text-muted-foreground">Fio 全参数（分组）</p>
                       {FIO_GROUPS.map((group) => (
                         <div key={group.id} className="rounded border border-border p-2">
-                          <button
-                            className="mb-2 flex w-full items-center justify-between text-left text-xs font-medium"
-                            onClick={() => setCollapsedGroups((previous) => ({ ...previous, [group.id]: !previous[group.id] }))}
-                          >
+                          <button className="mb-2 flex w-full items-center justify-between text-left text-xs font-medium" onClick={() => setCollapsedGroups((previous) => ({ ...previous, [group.id]: !previous[group.id] }))}>
                             <span>{group.title}</span>
                             <span>{collapsedGroups[group.id] ? '展开' : '收起'}</span>
                           </button>
@@ -388,11 +388,7 @@ export function WorkflowStudioPage() {
                       ))}
                       <div className="space-y-1 rounded border border-dashed border-border p-2">
                         <p className="text-xs text-muted-foreground">额外自定义参数（最大兼容，手写）</p>
-                        <Input
-                          placeholder="例如：randseed=42,io_submit_mode=offload"
-                          value={String(selectedNode.data.extraArgs ?? '')}
-                          onChange={(event) => updateSelectedNodeData('extraArgs', event.target.value)}
-                        />
+                        <Input placeholder="例如：randseed=42,io_submit_mode=offload" value={String(selectedNode.data.extraArgs ?? '')} onChange={(event) => updateSelectedNodeData('extraArgs', event.target.value)} />
                       </div>
                     </div>
                   ) : null}
@@ -411,7 +407,7 @@ export function WorkflowStudioPage() {
               )}
 
               {validation.errors.length > 0 ? (
-                <div className="rounded-md border border-red-500/40 bg-red-500/10 p-3">
+                <div className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3">
                   <p className="mb-2 text-xs font-medium text-red-500">拓扑错误</p>
                   <ul className="list-inside list-disc space-y-1 text-xs text-red-500">
                     {validation.errors.map((error) => (
@@ -420,10 +416,10 @@ export function WorkflowStudioPage() {
                   </ul>
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">暂无校验错误。</p>
+                <p className="mt-3 text-xs text-muted-foreground">暂无校验错误。</p>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         ) : null}
       </div>
     </div>
