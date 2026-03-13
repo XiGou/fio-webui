@@ -449,8 +449,8 @@ export function WorkflowStudioPage() {
             <Button size="sm" variant="outline" onClick={() => setLibraryOpen((v) => !v)}>{libraryOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} 节点库</Button>
             <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
             <Button size="sm" variant="outline" onClick={compileWorkflow}>编译并预览</Button>
-            <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行编译结果</Button>
-            <Button size="sm" variant="outline" onClick={() => navigate('/monitor')}>实时状态全屏</Button>
+            <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行</Button>
+            <Button size="sm" variant="outline" onClick={() => navigate('/monitor')}>实时状态</Button>
             <Button
               size="sm"
               variant="destructive"

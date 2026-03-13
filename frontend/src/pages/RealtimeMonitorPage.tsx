@@ -218,7 +218,7 @@ export function RealtimeMonitorPage() {
       <Card>
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">性能统计图（接近全屏）</CardTitle>
+            <CardTitle className="text-base">性能统计图</CardTitle>
             <div className="flex gap-2">
               {(['iops', 'bw', 'lat'] as const).map((key) => (
                 <Button key={key} size="sm" variant={statsTab === key ? 'default' : 'outline'} onClick={() => setStatsTab(key)}>
@@ -238,7 +238,7 @@ export function RealtimeMonitorPage() {
       </Card>
 
       <details className="rounded-md border border-border bg-card p-3" open={false}>
-        <summary className="cursor-pointer text-sm font-medium">其他属性（默认收起）</summary>
+        <summary className="cursor-pointer text-sm font-medium">其他属性</summary>
         <div className="mt-3 space-y-3 text-sm">
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <div><span className="text-muted-foreground">Run ID:</span> {activeRunId || '-'}</div>
