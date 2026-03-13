@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gouxi/fio-webui/internal/fio"
 )
@@ -19,6 +20,13 @@ type OptionsResponse struct {
 type DefaultsResponse struct {
 	Global fio.GlobalConfig `json:"global"`
 	Job    fio.JobConfig    `json:"job"`
+}
+
+type RunRequest struct {
+	Tasks           []fio.FioTask `json:"tasks"`
+	WorkflowID      string        `json:"workflow_id,omitempty"`
+	WorkflowVersion int           `json:"workflow_version,omitempty"`
+	CompiledAt      string        `json:"compiled_at,omitempty"`
 }
 
 func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +72,25 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// Try FioTaskList first
 	if err := json.Unmarshal(bodyBytes, &taskList); err == nil && len(taskList.Tasks) > 0 {
-		state, err := s.executor.RunTasks(taskList.Tasks)
+		state, err := s.executor.RunTasks(taskList.Tasks, nil)
+		if err != nil {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(state)
+		return
+	}
+
+	var runReq RunRequest
+	if err := json.Unmarshal(bodyBytes, &runReq); err == nil && len(runReq.Tasks) > 0 {
+		compiledAt := runReq.CompiledAt
+		if compiledAt == "" {
+			compiledAt = time.Now().Format(time.RFC3339)
+		}
+		metadata := &fio.RunMetadata{WorkflowID: runReq.WorkflowID, WorkflowVersion: runReq.WorkflowVersion, CompiledAt: compiledAt}
+		state, err := s.executor.RunTasks(runReq.Tasks, metadata)
 		if err != nil {
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -171,13 +197,13 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			type runItem struct {
-				ID        string             `json:"id"`
-				Status    string             `json:"status"`
-				StartTime string             `json:"start_time"`
-				EndTime   string             `json:"end_time,omitempty"`
-				Error     string             `json:"error,omitempty"`
-				DiskBytes int64              `json:"disk_bytes"`
-				Summary   *fio.RunSummary    `json:"summary,omitempty"`
+				ID        string          `json:"id"`
+				Status    string          `json:"status"`
+				StartTime string          `json:"start_time"`
+				EndTime   string          `json:"end_time,omitempty"`
+				Error     string          `json:"error,omitempty"`
+				DiskBytes int64           `json:"disk_bytes"`
+				Summary   *fio.RunSummary `json:"summary,omitempty"`
 			}
 			items := make([]runItem, 0, len(ids))
 			for _, rid := range ids {

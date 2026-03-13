@@ -7,6 +7,7 @@ import { Canvas } from '@/components/workflow/Canvas'
 import fioParameters from '@/data/fio-parameters.json'
 import type { WorkflowCanvasEdge } from '@/components/workflow/EdgeRenderer'
 import type { WorkflowCanvasNode, WorkflowNodeKind } from '@/components/workflow/NodeRenderer'
+import type { FioTask, FioTaskList, GlobalConfig, JobConfig } from '@/types/api'
 
 const VERSION_ITEMS = ['草稿工作流', '模板库', '已发布工作流']
 
@@ -14,6 +15,15 @@ type ValidationResult = {
   errors: string[]
   invalidNodeIds: Set<string>
   invalidEdgeIds: Set<string>
+}
+
+type CompileError = { nodeId?: string; message: string }
+type CompileResult = {
+  workflowId: string
+  workflowVersion: number
+  compiledAt: string
+  taskList: FioTaskList
+  errors: CompileError[]
 }
 
 type ParamType = 'text' | 'number' | 'boolean' | 'select'
@@ -197,6 +207,82 @@ const validateTopology = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge
   return { errors: Array.from(new Set(errors)), invalidNodeIds, invalidEdgeIds }
 }
 
+
+const DEFAULT_GLOBAL: GlobalConfig = {
+  ioengine: 'libaio',
+  direct: true,
+  runtime: 60,
+  time_based: true,
+  group_reporting: true,
+  log_avg_msec: 500,
+  output_format: 'json',
+  status_interval: 1,
+}
+
+const buildCompiledTaskList = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge[]): CompileResult => {
+  const compiledAt = new Date().toISOString()
+  const workflowId = `wf-${Date.now().toString(36)}`
+  const errors: CompileError[] = []
+  const taskList: FioTaskList = { tasks: [] }
+  const nodeById = new Map(nodes.map((n) => [n.id, n]))
+  const indegree = new Map<string, number>()
+  const adjacency = new Map<string, string[]>()
+  for (const node of nodes) {
+    indegree.set(node.id, 0)
+    adjacency.set(node.id, [])
+  }
+  for (const edge of edges) {
+    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) continue
+    adjacency.get(edge.source)?.push(edge.target)
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1)
+  }
+  const queue = nodes.filter((n) => (indegree.get(n.id) ?? 0) === 0).map((n) => n.id)
+  const order: string[] = []
+  while (queue.length > 0) {
+    const id = queue.shift()
+    if (!id) break
+    order.push(id)
+    for (const nextId of adjacency.get(id) ?? []) {
+      const next = (indegree.get(nextId) ?? 1) - 1
+      indegree.set(nextId, next)
+      if (next === 0) queue.push(nextId)
+    }
+  }
+  const sortedNodes = order.length === nodes.length ? order.map((id) => nodeById.get(id)!).filter(Boolean) : nodes
+  let currentTask: FioTask | null = null
+  const flush = () => { if (currentTask && currentTask.jobs.length > 0) taskList.tasks.push(currentTask); currentTask = null }
+  for (const node of sortedNodes) {
+    if (node.type === 'start' || node.type === 'end') continue
+    if (node.type === 'barrier') {
+      if (!currentTask || currentTask.jobs.length === 0) {
+        errors.push({ nodeId: node.id, message: 'Barrier 节点前缺少 job。' })
+        continue
+      }
+      currentTask.jobs[currentTask.jobs.length - 1] = { ...currentTask.jobs[currentTask.jobs.length - 1], stonewallAfter: true }
+      flush()
+      continue
+    }
+    const filename = String(node.data.filename ?? '/tmp/fio-test').trim()
+    if (!filename) errors.push({ nodeId: node.id, message: 'filename 不能为空。' })
+    const rw = String(node.data.rw ?? 'read').trim()
+    const bs = String(node.data.bs ?? '4k').trim()
+    const size = String(node.data.size ?? '1G').trim()
+    const job: JobConfig = {
+      name: String(node.data.label ?? node.id), filename: filename || '/tmp/fio-test', rw, bs, size,
+      numjobs: Number(node.data.numjobs ?? 1), iodepth: Number(node.data.iodepth ?? 1),
+      rwmixread: Number(node.data.rwmixread ?? 70), rate: String(node.data.rate ?? ''), runtime: Number(node.data.runtime ?? 0),
+      ioengine: String(node.data.ioengine ?? ''), nodeId: node.id,
+    }
+    if (!currentTask) {
+      currentTask = { name: String(node.data.taskName ?? `task-${taskList.tasks.length + 1}`), global: { ...DEFAULT_GLOBAL }, jobs: [] }
+    }
+    currentTask.jobs.push(job)
+  }
+  flush()
+  if (taskList.tasks.length === 0) errors.push({ message: '编译后无可执行任务。' })
+  return { workflowId, workflowVersion: 1, compiledAt, taskList, errors }
+}
+
 export function WorkflowStudioPage() {
   const [activeVersion, setActiveVersion] = useState(VERSION_ITEMS[0])
   const [libraryOpen, setLibraryOpen] = useState(false)
@@ -216,6 +302,9 @@ export function WorkflowStudioPage() {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(FIO_GROUPS.map((group) => [group.id, group.collapsedByDefault]))
   )
+  const [compileResult, setCompileResult] = useState<CompileResult | null>(null)
+  const [runError, setRunError] = useState('')
+  const [isRunning, setIsRunning] = useState(false)
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -253,6 +342,30 @@ export function WorkflowStudioPage() {
       return false
     }
     return !edges.some((edge) => edge.source === sourceId && edge.target === targetId)
+  }
+
+  const compileWorkflow = () => {
+    const topo = validateTopology(nodes, edges)
+    const compiled = buildCompiledTaskList(nodes, edges)
+    const invalidNodeIds = new Set([...topo.invalidNodeIds, ...compiled.errors.filter((e) => e.nodeId).map((e) => e.nodeId as string)])
+    setValidation({ ...topo, invalidNodeIds, errors: [...topo.errors, ...compiled.errors.map((e) => e.message)] })
+    setCompileResult(compiled.errors.length === 0 && topo.errors.length === 0 ? compiled : null)
+  }
+
+  const runCompiledWorkflow = async () => {
+    if (!compileResult) return
+    setIsRunning(true)
+    setRunError('')
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks: compileResult.taskList.tasks, workflow_id: compileResult.workflowId, workflow_version: compileResult.workflowVersion, compiled_at: compileResult.compiledAt }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { error?: string }
+      setRunError(err.error ?? res.statusText)
+    }
+    setIsRunning(false)
   }
 
   const renderFioField = (field: FioParamField) => {
@@ -312,7 +425,8 @@ export function WorkflowStudioPage() {
             </div>
             <Button size="sm" variant="outline" onClick={() => setLibraryOpen((v) => !v)}>{libraryOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} 节点库</Button>
             <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
-            <Button size="sm" onClick={() => setValidation(validateTopology(nodes, edges))}>运行前拓扑校验</Button>
+            <Button size="sm" variant="outline" onClick={compileWorkflow}>编译并预览</Button>
+            <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行编译结果</Button>
           </div>
         </CardHeader>
       </Card>
@@ -408,6 +522,27 @@ export function WorkflowStudioPage() {
                   ) : null}
                 </>
               )}
+
+
+              {compileResult ? (
+                <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs">
+                  <p className="mb-2 font-medium text-emerald-600">预览模式（{compileResult.taskList.tasks.length} 个任务）</p>
+                  <div className="space-y-2">
+                    {compileResult.taskList.tasks.map((task, taskIndex) => (
+                      <div key={`${task.name}-${taskIndex}`} className="rounded border border-emerald-500/30 p-2">
+                        <p className="font-medium">Task {taskIndex + 1}: {task.name}</p>
+                        <ul className="ml-4 list-disc">
+                          {task.jobs.map((job, jobIndex) => (
+                            <li key={`${job.name}-${jobIndex}`}>Job {jobIndex + 1}: {job.name} · rw={job.rw} · bs={job.bs} · nodeId={job.nodeId ?? '-'}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {runError ? <p className="mt-2 text-xs text-red-500">执行失败：{runError}</p> : null}
 
               {validation.errors.length > 0 ? (
                 <div className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3">
