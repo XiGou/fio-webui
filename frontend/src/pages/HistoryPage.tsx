@@ -29,6 +29,21 @@ function downloadJson(filename: string, payload: unknown) {
   URL.revokeObjectURL(href)
 }
 
+function downloadBlob(filename: string, blob: Blob) {
+  const href = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = href
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(href)
+}
+
+function getFileNameFromDisposition(disposition: string | null, fallback: string): string {
+  if (!disposition) return fallback
+  const match = disposition.match(/filename="?([^";]+)"?/i)
+  return match?.[1] ?? fallback
+}
+
 export function HistoryPage() {
   const [runs, setRuns] = useState<RunRecordExt[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,6 +53,7 @@ export function HistoryPage() {
   const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
   const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
   const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
+  const [statsRange, setStatsRange] = useState<'all' | '15m' | '1h' | '6h' | '24h'>('all')
   const [filters, setFilters] = useState<HistoryFilterState>({ search: '', status: 'all', timeRange: 'all', tag: 'all', templateSource: 'all' })
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const navigate = useNavigate()
@@ -138,17 +154,18 @@ export function HistoryPage() {
     })
   }, [detail])
 
-  const exportReport = useCallback(() => {
+  const exportReport = useCallback(async () => {
     if (!detail) return
-    downloadJson(`run-${detail.meta.id}-report.json`, {
-      meta: detail.meta,
-      summary: detail.meta.summary,
-      statsPoints: statsData,
-      logSummary,
-      config: detail.config,
-      exportedAt: new Date().toISOString(),
-    })
-  }, [detail, logSummary, statsData])
+    const query = new URLSearchParams({ metric: statsTab, timeRange: statsRange }).toString()
+    const res = await fetch(`/api/runs/${detail.meta.id}/report.html?${query}`)
+    if (!res.ok) {
+      downloadJson(`run-${detail.meta.id}-report.json`, { meta: detail.meta, stats: statsData, logSummary, config: detail.config })
+      return
+    }
+    const blob = await res.blob()
+    const filename = getFileNameFromDisposition(res.headers.get('Content-Disposition'), `run-${detail.meta.id}-report.html`)
+    downloadBlob(filename, blob)
+  }, [detail, logSummary, statsData, statsRange, statsTab])
 
   const deleteRuns = useCallback(async (ids: string[]) => {
     if (!ids.length) return
@@ -231,7 +248,7 @@ export function HistoryPage() {
           />
         </div>
         <div className="2xl:col-span-4">
-          <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} onStatsTabChange={setStatsTab} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
+          <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} statsRange={statsRange} onStatsTabChange={setStatsTab} onStatsRangeChange={setStatsRange} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
         </div>
         <div className="2xl:col-span-3">
           <ArtifactsPanel detail={detail} logSummary={logSummary} onFetchLogSummary={fetchLogSummary} onExportReport={exportReport} />

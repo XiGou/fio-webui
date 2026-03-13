@@ -24,6 +24,7 @@ type Server struct {
 	addr       string
 	debug      bool
 	dataDir    string
+	reportTpl  string
 	shutdownCh chan struct{}
 }
 
@@ -47,6 +48,10 @@ func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, erro
 	if err != nil {
 		return nil, err
 	}
+	reportTplBytes, err := webFS.ReadFile("web/report-template/report.html")
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		executor:   exec,
 		runStore:   store,
@@ -54,6 +59,7 @@ func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, erro
 		addr:       addr,
 		debug:      debug,
 		dataDir:    dataDir,
+		reportTpl:  string(reportTplBytes),
 		shutdownCh: make(chan struct{}),
 	}, nil
 }
@@ -77,7 +83,7 @@ func (s *Server) Run() error {
 	}
 	mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
 
-	srv := &http.Server{ Addr: s.addr, Handler: mux }
+	srv := &http.Server{Addr: s.addr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)

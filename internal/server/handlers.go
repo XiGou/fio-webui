@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"html/template"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -240,6 +243,37 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(points)
 			return
 		}
+		if sub == "report-data" {
+			view := &fio.ReportViewConfig{Metric: r.URL.Query().Get("metric"), TimeRange: r.URL.Query().Get("timeRange")}
+			report, err := s.runStore.BuildRunReport(id, view)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(report)
+			return
+		}
+		if sub == "report.html" {
+			view := &fio.ReportViewConfig{Metric: r.URL.Query().Get("metric"), TimeRange: r.URL.Query().Get("timeRange")}
+			report, err := s.runStore.BuildRunReport(id, view)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			reportJSON, err := json.Marshal(report)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			escapedData := template.JSEscapeString(string(reportJSON))
+			html := strings.ReplaceAll(s.reportTpl, "__REPORT_DATA__", escapedData)
+			html = strings.ReplaceAll(html, "__REPORT_GENERATED_AT__", strconv.FormatInt(time.Now().Unix(), 10))
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Content-Disposition", "attachment; filename=\""+reportFileName(id, "html")+"\"")
+			http.ServeContent(w, r, "", time.Now(), bytes.NewReader([]byte(html)))
+			return
+		}
 		meta, err := s.runStore.GetMeta(id)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -264,6 +298,17 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func reportFileName(runID string, ext string) string {
+	now := time.Now().Format("20060102-150405")
+	cleanID := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '-'
+	}, runID)
+	return "run-" + cleanID + "-" + now + "." + ext
 }
 
 func (s *Server) handleDebugFiles(w http.ResponseWriter, r *http.Request) {

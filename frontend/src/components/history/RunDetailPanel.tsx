@@ -9,7 +9,9 @@ type RunDetailPanelProps = {
   detail: RunDetail | null
   statsData: StatsDataPoint[]
   statsTab: 'iops' | 'bw' | 'lat'
+  statsRange: 'all' | '15m' | '1h' | '6h' | '24h'
   onStatsTabChange: (tab: 'iops' | 'bw' | 'lat') => void
+  onStatsRangeChange: (range: 'all' | '15m' | '1h' | '6h' | '24h') => void
   onAction: (action: HistoryAction) => void
   statusColor: (status: string) => string
   formatBytes: (bytes: number) => string
@@ -19,7 +21,14 @@ function hasConfig(config: FioTaskList | null): boolean {
   return Boolean(config?.tasks?.length)
 }
 
-export function RunDetailPanel({ detail, statsData, statsTab, onStatsTabChange, onAction, statusColor, formatBytes }: RunDetailPanelProps) {
+export function RunDetailPanel({ detail, statsData, statsTab, statsRange, onStatsTabChange, onStatsRangeChange, onAction, statusColor, formatBytes }: RunDetailPanelProps) {
+  const filteredStats = statsRange === 'all' || statsData.length === 0 ? statsData : (() => {
+    const secMap = { '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 } as const
+    const tail = statsData[statsData.length - 1]?.time ?? 0
+    const threshold = tail - secMap[statsRange]
+    return statsData.filter((item) => item.time >= threshold)
+  })()
+
   return (
     <Card className="h-full">
       <CardHeader className="pb-3">
@@ -56,10 +65,17 @@ export function RunDetailPanel({ detail, statsData, statsTab, onStatsTabChange, 
                   {(['iops', 'bw', 'lat'] as const).map((tab) => (
                     <button key={tab} className={`px-3 py-1.5 rounded-md border ${statsTab === tab ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted text-muted-foreground border-transparent'}`} onClick={() => onStatsTabChange(tab)}>{tab.toUpperCase()}</button>
                   ))}
+                  <select className="ml-auto rounded-md border bg-background px-2 py-1" value={statsRange} onChange={(e) => onStatsRangeChange(e.target.value as 'all' | '15m' | '1h' | '6h' | '24h')}>
+                    <option value="all">全部</option>
+                    <option value="15m">15分钟</option>
+                    <option value="1h">1小时</option>
+                    <option value="6h">6小时</option>
+                    <option value="24h">24小时</option>
+                  </select>
                 </div>
-                {statsTab === 'iops' && <StatsChart data={statsData} title="IOPS" type="iops" height={240} />}
-                {statsTab === 'bw' && <StatsChart data={statsData} title="带宽" type="bw" height={240} />}
-                {statsTab === 'lat' && <StatsChart data={statsData} title="延迟" type="lat" height={240} />}
+                {statsTab === 'iops' && <StatsChart data={filteredStats} title="IOPS" type="iops" height={240} />}
+                {statsTab === 'bw' && <StatsChart data={filteredStats} title="带宽" type="bw" height={240} />}
+                {statsTab === 'lat' && <StatsChart data={filteredStats} title="延迟" type="lat" height={240} />}
               </div>
             )}
           </>
