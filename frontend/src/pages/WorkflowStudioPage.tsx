@@ -299,6 +299,7 @@ export function WorkflowStudioPage() {
     { id: 'edge-2', source: 'fio-1', target: 'end-1' },
   ])
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
+  const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
   const [validation, setValidation] = useState<ValidationResult>({ errors: [], invalidNodeIds: new Set(), invalidEdgeIds: new Set() })
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(FIO_GROUPS.map((group) => [group.id, group.collapsedByDefault]))
@@ -312,6 +313,22 @@ export function WorkflowStudioPage() {
     const handleKey = (event: KeyboardEvent) => {
       if (event.key.toLowerCase() === 'b') setLibraryOpen((value) => !value)
       if (event.key.toLowerCase() === 'p') setPropertyOpen((value) => !value)
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        const selectedNodeSet = new Set(selectedNodeIds)
+        if (selectedNodeSet.size > 0) {
+          setNodes((previous) => previous.filter((node) => !selectedNodeSet.has(node.id)))
+          setEdges((previous) => previous.filter((edge) => !selectedNodeSet.has(edge.source) && !selectedNodeSet.has(edge.target)))
+          setSelectedNodeIds([])
+          setSelectedEdgeIds([])
+          setCompileResult(null)
+          return
+        }
+        if (selectedEdgeIds.length > 0) {
+          setEdges((previous) => previous.filter((edge) => !selectedEdgeIds.includes(edge.id)))
+          setSelectedEdgeIds([])
+          setCompileResult(null)
+        }
+      }
       if (event.key.toLowerCase() === 'v' && (event.ctrlKey || event.metaKey)) {
         event.preventDefault()
         setValidation(validateTopology(nodes, edges))
@@ -319,7 +336,7 @@ export function WorkflowStudioPage() {
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [nodes, edges])
+  }, [nodes, edges, selectedNodeIds, selectedEdgeIds])
 
   const selectedNode = useMemo(
     () => nodes.find((node) => selectedNodeIds.length === 1 && node.id === selectedNodeIds[0]),
@@ -371,7 +388,7 @@ export function WorkflowStudioPage() {
     }
     const runState = await res.json().catch(() => null) as RunState | null
     setIsRunning(false)
-    navigate('/legacy', { state: { focusMonitor: true, runId: runState?.id } })
+    navigate(`/monitor${runState?.id ? `?runId=${runState.id}` : ''}`)
   }
 
   const renderFioField = (field: FioParamField) => {
@@ -419,7 +436,7 @@ export function WorkflowStudioPage() {
         <CardHeader className="flex flex-row items-center justify-between py-3">
           <div>
             <CardTitle className="text-base font-medium">工作流工作台</CardTitle>
-            <p className="text-xs text-muted-foreground">B: 节点库开关 · P: 属性面板开关 · Ctrl/Cmd+V: 运行拓扑校验</p>
+            <p className="text-xs text-muted-foreground">B: 节点库开关 · P: 属性面板开关 · Del/Backspace: 删除选中节点或边 · Ctrl/Cmd+V: 运行拓扑校验</p>
           </div>
           <div className="flex items-center gap-2">
             <div className="flex gap-1 rounded-md border border-border bg-background p-1">
@@ -433,6 +450,28 @@ export function WorkflowStudioPage() {
             <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
             <Button size="sm" variant="outline" onClick={compileWorkflow}>编译并预览</Button>
             <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行编译结果</Button>
+            <Button size="sm" variant="outline" onClick={() => navigate('/monitor')}>实时状态全屏</Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={selectedNodeIds.length === 0 && selectedEdgeIds.length === 0}
+              onClick={() => {
+                const selectedNodeSet = new Set(selectedNodeIds)
+                if (selectedNodeSet.size > 0) {
+                  setNodes((previous) => previous.filter((node) => !selectedNodeSet.has(node.id)))
+                  setEdges((previous) => previous.filter((edge) => !selectedNodeSet.has(edge.source) && !selectedNodeSet.has(edge.target)))
+                  setSelectedNodeIds([])
+                  setSelectedEdgeIds([])
+                  setCompileResult(null)
+                  return
+                }
+                if (selectedEdgeIds.length > 0) {
+                  setEdges((previous) => previous.filter((edge) => !selectedEdgeIds.includes(edge.id)))
+                  setSelectedEdgeIds([])
+                  setCompileResult(null)
+                }
+              }}
+            >删除选中</Button>
           </div>
         </CardHeader>
       </Card>
@@ -442,6 +481,7 @@ export function WorkflowStudioPage() {
           nodes={nodes}
           edges={edges}
           selectedNodeIds={selectedNodeIds}
+          selectedEdgeIds={selectedEdgeIds}
           invalidNodeIds={validation.invalidNodeIds}
           invalidEdgeIds={validation.invalidEdgeIds}
           onNodeMove={(nodeId, nextPosition) =>
@@ -449,11 +489,19 @@ export function WorkflowStudioPage() {
           }
           onSelectionChange={(ids) => {
             setSelectedNodeIds(ids)
-            if (ids.length > 0) setPropertyOpen(true)
+            if (ids.length > 0) {
+              setSelectedEdgeIds([])
+              setPropertyOpen(true)
+            }
+          }}
+          onEdgeSelectionChange={(ids) => {
+            setSelectedEdgeIds(ids)
+            if (ids.length > 0) setSelectedNodeIds([])
           }}
           canConnect={canConnect}
           onConnect={(source, target) => {
             setEdges((previous) => [...previous, { id: nextId('edge'), source, target }])
+            setCompileResult(null)
           }}
         />
 
