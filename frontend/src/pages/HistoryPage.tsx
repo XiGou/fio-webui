@@ -119,7 +119,7 @@ export function HistoryPage() {
     (config: FioTaskList | null) => {
       if (!config || !config.tasks?.length) return
       closeDetail()
-      navigate('/', { replace: true, state: { runConfig: config } })
+      navigate('/legacy', { replace: true, state: { runConfig: config } })
     },
     [navigate, closeDetail]
   )
