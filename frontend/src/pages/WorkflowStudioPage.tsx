@@ -29,6 +29,14 @@ type CompileResult = {
   errors: CompileError[]
 }
 
+type WorkflowTemplateItem = {
+  id: string
+  name: string
+  description: string
+  tags?: string[]
+  current_version: number
+}
+
 type ParamType = 'text' | 'number' | 'boolean' | 'select'
 type FioParamField = { key: string; label: string; type: ParamType; options?: string[]; placeholder?: string }
 type FioParamGroup = { id: string; title: string; collapsedByDefault: boolean; fields: FioParamField[] }
@@ -309,6 +317,9 @@ export function WorkflowStudioPage() {
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null)
   const [runError, setRunError] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [templates, setTemplates] = useState<WorkflowTemplateItem[]>([])
+  const [templateMessage, setTemplateMessage] = useState('')
+  const [compatibilityHints, setCompatibilityHints] = useState<string[]>([])
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -384,6 +395,17 @@ export function WorkflowStudioPage() {
     return () => window.removeEventListener('keydown', handleKey)
   }, [nodes, edges, selectedNodeIds, selectedEdgeIds])
 
+  const loadTemplates = async () => {
+    const res = await fetch('/api/workflows')
+    if (!res.ok) return
+    const items = await res.json().catch(() => []) as WorkflowTemplateItem[]
+    setTemplates(items)
+  }
+
+  useEffect(() => {
+    loadTemplates()
+  }, [])
+
   const selectedNode = useMemo(
     () => nodes.find((node) => selectedNodeIds.length === 1 && node.id === selectedNodeIds[0]),
     [nodes, selectedNodeIds]
@@ -435,6 +457,95 @@ export function WorkflowStudioPage() {
     const runState = await res.json().catch(() => null) as RunState | null
     setIsRunning(false)
     navigate(`/monitor${runState?.id ? `?runId=${runState.id}` : ''}`)
+  }
+
+  const saveAsTemplate = async () => {
+    const compiled = compileResult ?? buildCompiledTaskList(nodes, edges)
+    if (compiled.errors.length > 0) {
+      setTemplateMessage('请先修复编译错误后再保存模板。')
+      return
+    }
+    const name = window.prompt('模板名称', `工作流模板-${new Date().toLocaleString()}`)?.trim()
+    if (!name) return
+    const description = window.prompt('模板描述', '从 Studio 保存的模板') ?? ''
+    const tags = (window.prompt('模板标签（逗号分隔）', 'studio') ?? '').split(',').map((i) => i.trim()).filter(Boolean)
+    const res = await fetch('/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, tags, created_by: 'studio-user', task_list: compiled.taskList }),
+    })
+    if (!res.ok) {
+      setTemplateMessage(`保存模板失败: ${res.statusText}`)
+      return
+    }
+    setTemplateMessage('模板已保存。')
+    loadTemplates()
+  }
+
+  const createFromTemplate = async () => {
+    if (templates.length === 0) {
+      setTemplateMessage('暂无模板可用。')
+      return
+    }
+    const input = window.prompt(`输入模板ID进行加载:
+${templates.map((t) => `${t.id} (${t.name})`).join('\n')}`)?.trim()
+    if (!input) return
+    const res = await fetch(`/api/workflows/${input}`)
+    if (!res.ok) {
+      setTemplateMessage('模板不存在。')
+      return
+    }
+    const detail = await res.json() as { versions: Array<{ task_list: FioTaskList; compatibility?: { hints?: string[] } }> }
+    const latest = detail.versions?.[detail.versions.length - 1]
+    if (!latest?.task_list?.tasks?.length) {
+      setTemplateMessage('模板内容为空。')
+      return
+    }
+    const mapped = taskListToWorkflow(latest.task_list)
+    const restoredNodes: WorkflowCanvasNode[] = [
+      { id: 'start-template', type: 'start', position: { x: 80, y: 120 }, data: { label: '开始' } },
+      ...mapped.nodes.map((node, index) => ({
+        id: `template-${node.id}`,
+        type: node.type === WORKFLOW_NODE_TYPE.CONTROL_STONEWALL ? 'barrier' as const : 'fioJob' as const,
+        position: { x: 280 + index * 220, y: 120 },
+        data: node.type === WORKFLOW_NODE_TYPE.CONTROL_STONEWALL
+          ? { label: node.label ?? 'stonewall', stonewall: true }
+          : { label: node.label ?? `模板节点-${index + 1}`, ...((node.config as { job?: JobConfig }).job ?? {}) },
+      })),
+      { id: 'end-template', type: 'end', position: { x: 280 + mapped.nodes.length * 220, y: 120 }, data: { label: '结束' } },
+    ]
+    const restoredEdges: WorkflowCanvasEdge[] = restoredNodes.slice(1).map((node, index) => ({ id: `template-edge-${index}`, source: restoredNodes[index].id, target: node.id }))
+    setNodes(restoredNodes)
+    setEdges(restoredEdges)
+    setCompatibilityHints(latest.compatibility?.hints ?? [])
+    setTemplateMessage('已从模板创建工作流。')
+  }
+
+  const publishTemplateVersion = async () => {
+    if (templates.length === 0) {
+      setTemplateMessage('暂无模板可发布版本。')
+      return
+    }
+    const compiled = compileResult ?? buildCompiledTaskList(nodes, edges)
+    if (compiled.errors.length > 0) {
+      setTemplateMessage('请先修复编译错误。')
+      return
+    }
+    const id = window.prompt('输入要发布版本的模板ID', templates[0].id)?.trim()
+    if (!id) return
+    const res = await fetch(`/api/workflows/${id}/versions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ published_by: 'studio-user', task_list: compiled.taskList }),
+    })
+    if (!res.ok) {
+      setTemplateMessage(`发布失败: ${res.statusText}`)
+      return
+    }
+    const data = await res.json() as { compatibility?: { hints?: string[] } }
+    setCompatibilityHints(data.compatibility?.hints ?? [])
+    setTemplateMessage('模板新版本已发布。')
+    loadTemplates()
   }
 
   const renderFioField = (field: FioParamField) => {
@@ -495,6 +606,9 @@ export function WorkflowStudioPage() {
             <Button size="sm" variant="outline" onClick={() => setLibraryOpen((v) => !v)}>{libraryOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} 节点库</Button>
             <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
             <Button size="sm" variant="outline" onClick={compileWorkflow}>编译并预览</Button>
+            <Button size="sm" variant="outline" onClick={saveAsTemplate}>保存为模板</Button>
+            <Button size="sm" variant="outline" onClick={createFromTemplate}>从模板新建</Button>
+            <Button size="sm" variant="outline" onClick={publishTemplateVersion}>发布模板版本</Button>
             <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行</Button>
             <Button size="sm" variant="outline" onClick={() => navigate('/monitor')}>实时状态</Button>
             <Button
@@ -643,6 +757,13 @@ export function WorkflowStudioPage() {
               ) : null}
 
               {runError ? <p className="mt-2 text-xs text-red-500">执行失败：{runError}</p> : null}
+              {templateMessage ? <p className="mt-2 text-xs text-sky-600">{templateMessage}</p> : null}
+              {compatibilityHints.length > 0 ? (
+                <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700">
+                  <p className="font-medium">模板兼容迁移提示</p>
+                  <ul className="list-disc pl-4">{compatibilityHints.map((hint) => <li key={hint}>{hint}</li>)}</ul>
+                </div>
+              ) : null}
 
               {validation.errors.length > 0 ? (
                 <div className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3">
