@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
@@ -7,7 +8,7 @@ import { Canvas } from '@/components/workflow/Canvas'
 import fioParameters from '@/data/fio-parameters.json'
 import type { WorkflowCanvasEdge } from '@/components/workflow/EdgeRenderer'
 import type { WorkflowCanvasNode, WorkflowNodeKind } from '@/components/workflow/NodeRenderer'
-import type { FioTask, FioTaskList, GlobalConfig, JobConfig } from '@/types/api'
+import type { FioTask, FioTaskList, GlobalConfig, JobConfig, RunState } from '@/types/api'
 
 const VERSION_ITEMS = ['草稿工作流', '模板库', '已发布工作流']
 
@@ -305,6 +306,7 @@ export function WorkflowStudioPage() {
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null)
   const [runError, setRunError] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const navigate = useNavigate()
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -364,8 +366,12 @@ export function WorkflowStudioPage() {
     if (!res.ok) {
       const err = await res.json().catch(() => ({})) as { error?: string }
       setRunError(err.error ?? res.statusText)
+      setIsRunning(false)
+      return
     }
+    const runState = await res.json().catch(() => null) as RunState | null
     setIsRunning(false)
+    navigate('/legacy', { state: { focusMonitor: true, runId: runState?.id } })
   }
 
   const renderFioField = (field: FioParamField) => {

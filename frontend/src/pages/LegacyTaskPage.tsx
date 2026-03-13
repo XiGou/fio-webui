@@ -384,6 +384,7 @@ export function LegacyTaskPage() {
   useEffect(() => {
     const preset = location.state?.preset as PresetWorkload | undefined
     const runConfig = location.state?.runConfig as FioTaskList | undefined
+    const focusMonitor = Boolean(location.state?.focusMonitor)
     if (preset) {
       const draft = presetToTaskDraft(preset)
       setTasks((prev) => {
@@ -401,6 +402,10 @@ export function LegacyTaskPage() {
         return newTaskDraft({ name: t.name, global: t.global, jobs })
       })
       setTasks(drafts.map((d) => ({ ...d, _collapsed: true })))
+      navigate('/legacy', { replace: true, state: {} })
+    } else if (focusMonitor) {
+      setStatsPanelOpen(true)
+      setLogPanelOpen(true)
       navigate('/legacy', { replace: true, state: {} })
     }
   }, [location.state, navigate])
