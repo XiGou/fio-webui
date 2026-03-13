@@ -18,14 +18,15 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	executor   *fio.Executor
-	runStore   *fio.RunStore
-	staticFS   fs.FS
-	addr       string
-	debug      bool
-	dataDir    string
-	reportTpl  string
-	shutdownCh chan struct{}
+	executor      *fio.Executor
+	runStore      *fio.RunStore
+	workflowStore *fio.WorkflowStore
+	staticFS      fs.FS
+	addr          string
+	debug         bool
+	dataDir       string
+	reportTpl     string
+	shutdownCh    chan struct{}
 }
 
 func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, error) {
@@ -37,6 +38,10 @@ func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, erro
 		return nil, err
 	}
 	store, err := fio.NewRunStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	workflowStore, err := fio.NewWorkflowStore(dataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -53,14 +58,15 @@ func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, erro
 		return nil, err
 	}
 	return &Server{
-		executor:   exec,
-		runStore:   store,
-		staticFS:   distFS,
-		addr:       addr,
-		debug:      debug,
-		dataDir:    dataDir,
-		reportTpl:  string(reportTplBytes),
-		shutdownCh: make(chan struct{}),
+		executor:      exec,
+		runStore:      store,
+		workflowStore: workflowStore,
+		staticFS:      distFS,
+		addr:          addr,
+		debug:         debug,
+		dataDir:       dataDir,
+		reportTpl:     string(reportTplBytes),
+		shutdownCh:    make(chan struct{}),
 	}, nil
 }
 
@@ -77,6 +83,8 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/events", s.handleWebSocket)
 	mux.HandleFunc("/api/runs", s.handleRuns)
 	mux.HandleFunc("/api/runs/", s.handleRuns)
+	mux.HandleFunc("/api/workflows", s.handleWorkflows)
+	mux.HandleFunc("/api/workflows/", s.handleWorkflows)
 	if s.debug {
 		mux.HandleFunc("/api/debug/files", s.handleDebugFiles)
 		log.Println("Debug mode enabled")

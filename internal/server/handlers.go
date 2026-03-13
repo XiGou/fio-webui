@@ -335,3 +335,109 @@ func (s *Server) handleDebugFiles(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(response)
 }
+func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/workflows")
+	path = strings.Trim(path, "/")
+	parts := strings.Split(path, "/")
+	id := ""
+	sub := ""
+	if len(parts) > 0 && parts[0] != "" {
+		id = parts[0]
+	}
+	if len(parts) > 1 {
+		sub = parts[1]
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		if id == "" {
+			items, err := s.workflowStore.List()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(items)
+			return
+		}
+		if sub == "versions" {
+			versions, err := s.workflowStore.Versions(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(versions)
+			return
+		}
+		wf, err := s.workflowStore.Get(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(wf)
+	case http.MethodPost:
+		if id != "" && sub == "versions" {
+			var req fio.WorkflowPublishVersionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			version, err := s.workflowStore.PublishVersion(id, req)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(version)
+			return
+		}
+		if id != "" {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		var req fio.WorkflowCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		wf, err := s.workflowStore.Create(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(wf)
+	case http.MethodPut:
+		if id == "" || sub != "" {
+			http.Error(w, "id required", http.StatusBadRequest)
+			return
+		}
+		var req fio.WorkflowUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		wf, err := s.workflowStore.Update(id, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(wf)
+	case http.MethodDelete:
+		if id == "" || sub != "" {
+			http.Error(w, "id required", http.StatusBadRequest)
+			return
+		}
+		if err := s.workflowStore.Delete(id); err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
