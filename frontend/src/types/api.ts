@@ -28,6 +28,7 @@ export interface JobConfig {
   stonewallAfter?: boolean // If true, insert stonewall after this job
   runtime?: number // Override global runtime for this job
   ioengine?: string // Override global ioengine for this job
+  nodeId?: string // Source workflow node id for traceability
 }
 
 export interface FioConfig {

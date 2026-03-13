@@ -32,34 +32,35 @@ type GlobalConfig struct {
 	TimeBased      bool     `json:"time_based"`
 	GroupReport    bool     `json:"group_reporting"`
 	LogAvgMsec     int      `json:"log_avg_msec"`
-	StatusInterval int      `json:"status_interval"`  // seconds between status updates
-	OutputFormat   string   `json:"output_format"`    // json or normal
+	StatusInterval int      `json:"status_interval"` // seconds between status updates
+	OutputFormat   string   `json:"output_format"`   // json or normal
 }
 
 type JobConfig struct {
-	Name          string `json:"name"`
-	Filename      string `json:"filename"`
-	RW            RWType `json:"rw"`
-	BS            string `json:"bs"`
-	Size          string `json:"size"`
-	NumJobs       int    `json:"numjobs"`
-	IODepth       int    `json:"iodepth"`
-	RWMixRead     int    `json:"rwmixread"`
-	Rate          string `json:"rate,omitempty"`
-	StonewallAfter bool  `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
-	Runtime       int    `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
-	IOEngine      string `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
+	Name           string `json:"name"`
+	Filename       string `json:"filename"`
+	RW             RWType `json:"rw"`
+	BS             string `json:"bs"`
+	Size           string `json:"size"`
+	NumJobs        int    `json:"numjobs"`
+	IODepth        int    `json:"iodepth"`
+	RWMixRead      int    `json:"rwmixread"`
+	Rate           string `json:"rate,omitempty"`
+	StonewallAfter bool   `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
+	Runtime        int    `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
+	IOEngine       string `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
+	NodeID         string `json:"nodeId,omitempty"`         // Source workflow node ID for traceability
 }
 
 type FioConfig struct {
-	Global      GlobalConfig `json:"global"`
-	Jobs        []JobConfig  `json:"jobs"`
-	Sequential  bool         `json:"sequential"` // If true, run jobs sequentially (one fio command after another). If false, run in parallel.
+	Global     GlobalConfig `json:"global"`
+	Jobs       []JobConfig  `json:"jobs"`
+	Sequential bool         `json:"sequential"` // If true, run jobs sequentially (one fio command after another). If false, run in parallel.
 }
 
 // FioTask represents a complete fio command configuration
 type FioTask struct {
-	Name  string     `json:"name"`
+	Name   string       `json:"name"`
 	Global GlobalConfig `json:"global"`
 	Jobs   []JobConfig  `json:"jobs"`
 }
@@ -77,7 +78,7 @@ func DefaultGlobalConfig() GlobalConfig {
 		TimeBased:      true,
 		GroupReport:    true,
 		LogAvgMsec:     500,
-		StatusInterval: 1,     // 1 second status updates
+		StatusInterval: 1,      // 1 second status updates
 		OutputFormat:   "json", // JSON format for status updates
 	}
 }

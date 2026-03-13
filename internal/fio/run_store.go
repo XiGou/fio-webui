@@ -13,13 +13,16 @@ import (
 
 // RunMeta holds metadata for a recorded run
 type RunMeta struct {
-	ID        string      `json:"id"`
-	Status    string      `json:"status"`
-	StartTime string      `json:"start_time"`
-	EndTime   string      `json:"end_time,omitempty"`
-	Error     string      `json:"error,omitempty"`
-	DiskBytes int64       `json:"disk_bytes"`
-	Summary   *RunSummary `json:"summary,omitempty"`
+	ID              string      `json:"id"`
+	Status          string      `json:"status"`
+	StartTime       string      `json:"start_time"`
+	EndTime         string      `json:"end_time,omitempty"`
+	Error           string      `json:"error,omitempty"`
+	DiskBytes       int64       `json:"disk_bytes"`
+	Summary         *RunSummary `json:"summary,omitempty"`
+	WorkflowID      string      `json:"workflow_id,omitempty"`
+	WorkflowVersion int         `json:"workflow_version,omitempty"`
+	CompiledAt      string      `json:"compiled_at,omitempty"`
 }
 
 // RunSummary holds parsed IOPS, BW, Lat from the run

@@ -14,6 +14,7 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
   const chartRef = useRef<HTMLDivElement>(null)
   const plotRef = useRef<uPlot | null>(null)
   const [width, setWidth] = useState(800)
+  const prevTypeRef = useRef<string | null>(null)
 
   // Update width when container resizes (e.g. when Status panel opens)
   useEffect(() => {
@@ -144,13 +145,21 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
     }
 
     if (plotRef.current) {
-      // Update existing plot in-place for real-time updates (no destroy/recreate)
-      plotRef.current.setData(plotData, false)
-      plotRef.current.setSize({ width: safeWidth, height })
-      plotRef.current.setScale('x', { min: 0, max: maxX })
-    } else {
-      // Create new plot
-      plotRef.current = new uPlot(opts, plotData, chartRef.current)
+      if (prevTypeRef.current !== type) {
+        // type 变了，必须销毁重建，否则 series/legend 不会更新
+        plotRef.current.destroy()
+        plotRef.current = null
+      } else {
+        // type 没变，直接 setData 复用
+        plotRef.current.setData(plotData, false)
+        plotRef.current.setSize({ width: safeWidth, height })
+        plotRef.current.setScale('x', { min: 0, max: maxX })
+      }
+    }
+    prevTypeRef.current = type
+
+    if (!plotRef.current) {
+      plotRef.current = new uPlot(opts, plotData, chartRef.current!)
     }
   }, [data, type, title, width, height])
 

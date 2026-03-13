@@ -218,7 +218,7 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 }
 
 // RunTasks runs multiple fio tasks sequentially (one task after another)
-func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
+func (e *Executor) RunTasks(tasks []FioTask, metadata *RunMetadata) (*RunState, error) {
 	e.mu.Lock()
 	if e.state != nil && e.state.Status == StatusRunning {
 		e.mu.Unlock()
@@ -240,7 +240,7 @@ func (e *Executor) RunTasks(tasks []FioTask) (*RunState, error) {
 			return nil, fmt.Errorf("create run dir: %w", err)
 		}
 		taskList := &FioTaskList{Tasks: tasks}
-		runConfig := &RunConfig{TaskList: taskList, Workflow: BuildWorkflowFromTaskList(taskList)}
+		runConfig := &RunConfig{TaskList: taskList, Workflow: BuildWorkflowFromTaskList(taskList), Metadata: metadata}
 		if err := e.RunStore.SaveConfig(runID, runConfig); err != nil && Debug {
 			log.Printf("[DEBUG] SaveConfig: %v", err)
 		}
@@ -441,6 +441,12 @@ func (e *Executor) finalizeRun(runID string) {
 	}
 	if errMsg != "" {
 		meta.Error = errMsg
+	}
+	runConfig, err := e.RunStore.GetRunConfig(runID)
+	if err == nil && runConfig != nil && runConfig.Metadata != nil {
+		meta.WorkflowID = runConfig.Metadata.WorkflowID
+		meta.WorkflowVersion = runConfig.Metadata.WorkflowVersion
+		meta.CompiledAt = runConfig.Metadata.CompiledAt
 	}
 	e.RunStore.SaveMeta(runID, meta)
 }

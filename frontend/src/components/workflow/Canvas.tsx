@@ -6,10 +6,12 @@ type CanvasProps = {
   nodes: WorkflowCanvasNode[]
   edges: WorkflowCanvasEdge[]
   selectedNodeIds: string[]
+  selectedEdgeIds: string[]
   invalidNodeIds: Set<string>
   invalidEdgeIds: Set<string>
   onNodeMove: (nodeId: string, nextPosition: { x: number; y: number }) => void
   onSelectionChange: (nodeIds: string[]) => void
+  onEdgeSelectionChange: (edgeIds: string[]) => void
   onConnect: (source: string, target: string) => void
   canConnect?: (source: string, target: string) => boolean
 }
@@ -23,10 +25,12 @@ export function Canvas({
   nodes,
   edges,
   selectedNodeIds,
+  selectedEdgeIds,
   invalidNodeIds,
   invalidEdgeIds,
   onNodeMove,
   onSelectionChange,
+  onEdgeSelectionChange,
   onConnect,
   canConnect,
 }: CanvasProps) {
@@ -101,6 +105,7 @@ export function Canvas({
       setSelectingRect({ start: world, end: world })
     } else {
       onSelectionChange([])
+      onEdgeSelectionChange([])
     }
   }
 
@@ -147,6 +152,7 @@ export function Canvas({
         .map((node) => node.id)
 
       onSelectionChange(selected)
+      if (selected.length > 0) onEdgeSelectionChange([])
       setSelectingRect(null)
     }
   }
@@ -192,7 +198,25 @@ export function Canvas({
       >
         <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
           {edges.map((edge) => (
-            <EdgeRenderer key={edge.id} edge={edge} nodesById={nodesById} invalid={invalidEdgeIds.has(edge.id)} />
+            <EdgeRenderer
+              key={edge.id}
+              edge={edge}
+              nodesById={nodesById}
+              invalid={invalidEdgeIds.has(edge.id)}
+              selected={selectedEdgeIds.includes(edge.id)}
+              onSelect={(edgeId, multi) => {
+                if (multi) {
+                  onEdgeSelectionChange(
+                    selectedEdgeIds.includes(edgeId)
+                      ? selectedEdgeIds.filter((id) => id !== edgeId)
+                      : [...selectedEdgeIds, edgeId]
+                  )
+                } else {
+                  onSelectionChange([])
+                  onEdgeSelectionChange([edgeId])
+                }
+              }}
+            />
           ))}
           {temporaryPath ? (
             <path d={temporaryPath} fill="none" stroke="#2563eb" strokeWidth={2} strokeDasharray="5 4" />
@@ -243,7 +267,7 @@ export function Canvas({
       ) : null}
 
       <div className="absolute right-3 top-3 rounded border border-border bg-background/90 px-2 py-1 text-xs text-muted-foreground">
-        缩放 {Math.round(viewport.zoom * 100)}% · Shift + 拖拽框选 · 中键平移 {connectingFrom ? `· 连线中: ${connectingFrom}` : ''}
+        缩放 {Math.round(viewport.zoom * 100)}% · Shift + 拖拽框选 · 单击边可选中 · 中键平移 {connectingFrom ? `· 连线中: ${connectingFrom}` : ''}
       </div>
     </div>
   )

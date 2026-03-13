@@ -37,6 +37,13 @@ type WorkflowDefinition struct {
 type RunConfig struct {
 	TaskList *FioTaskList        `json:"task_list,omitempty"`
 	Workflow *WorkflowDefinition `json:"workflow,omitempty"`
+	Metadata *RunMetadata        `json:"metadata,omitempty"`
+}
+
+type RunMetadata struct {
+	WorkflowID      string `json:"workflow_id,omitempty"`
+	WorkflowVersion int    `json:"workflow_version,omitempty"`
+	CompiledAt      string `json:"compiled_at,omitempty"`
 }
 
 func BuildWorkflowFromTaskList(taskList *FioTaskList) *WorkflowDefinition {
