@@ -1,11 +1,14 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 import { Boxes, History, ListTree } from 'lucide-react'
 
 export function Layout() {
+  const location = useLocation()
+  const isStudioPage = location.pathname === '/'
+
   return (
     <div className="min-h-screen bg-background">
-      <div className="container mx-auto max-w-7xl space-y-5 p-6">
+      <div className={cn('space-y-5 px-3 py-4', isStudioPage ? 'mx-auto w-full max-w-none' : 'container mx-auto max-w-7xl p-6')}>
         <header className="flex items-center justify-between border-b border-border pb-4">
           <div className="flex items-center gap-6">
             <h1 className="text-xl font-semibold text-foreground">FIO WebUI</h1>

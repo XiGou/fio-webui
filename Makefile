@@ -1,7 +1,7 @@
 # FIO WebUI - 开发与构建
 # 使用 make 或 make help 查看目标
 
-.PHONY: help dev dev-backend dev-frontend install-air test build ci run clean
+.PHONY: help dev dev-backend dev-frontend install-air init-ai-skills test build ci run clean
 
 help:
 	@echo "FIO WebUI Makefile"
@@ -13,6 +13,7 @@ help:
 	@echo ""
 	@echo "  工具"
 	@echo "    make install-air   - 安装 air（Go 热加载）"
+	@echo "    make init-ai-skills - 初始化 AI 设计技能（impeccable）"
 	@echo ""
 	@echo "  测试与构建"
 	@echo "    make test         - 运行 Go 单测（-race，与 CI 一致）"
@@ -37,6 +38,10 @@ dev-frontend:
 install-air:
 	@go install github.com/air-verse/air@latest
 	@echo "air 已安装，可直接运行: make dev-backend 或 make dev"
+
+# 初始化 AI 设计类 skill（impeccable）
+init-ai-skills:
+	@./scripts/init_ai_env.sh
 
 # 运行 Go 单测（-race，与 GitHub Actions CI 一致）
 test:

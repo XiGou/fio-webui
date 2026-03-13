@@ -1,0 +1,81 @@
+{
+  "groups": [
+    {
+      "id": "basic",
+      "title": "基础参数",
+      "collapsedByDefault": false,
+      "fields": [
+        { "key": "rw", "label": "rw", "type": "select", "options": ["read", "write", "randread", "randwrite", "randrw", "readwrite", "trim", "randtrim"], "placeholder": "read" },
+        { "key": "bs", "label": "bs", "type": "text", "placeholder": "4k" },
+        { "key": "iodepth", "label": "iodepth", "type": "number", "placeholder": "1" },
+        { "key": "numjobs", "label": "numjobs", "type": "number", "placeholder": "1" },
+        { "key": "size", "label": "size", "type": "text", "placeholder": "10G" },
+        { "key": "runtime", "label": "runtime", "type": "number", "placeholder": "60" },
+        { "key": "time_based", "label": "time_based", "type": "boolean" },
+        { "key": "filename", "label": "filename", "type": "text", "placeholder": "/dev/nvme0n1" },
+        { "key": "directory", "label": "directory", "type": "text", "placeholder": "/data" }
+      ]
+    },
+    {
+      "id": "io",
+      "title": "IO / 引擎",
+      "collapsedByDefault": false,
+      "fields": [
+        { "key": "ioengine", "label": "ioengine", "type": "select", "options": ["libaio", "io_uring", "sync", "psync", "mmap", "posixaio"] },
+        { "key": "direct", "label": "direct", "type": "boolean" },
+        { "key": "buffered", "label": "buffered", "type": "boolean" },
+        { "key": "invalidate", "label": "invalidate", "type": "boolean" },
+        { "key": "fsync", "label": "fsync", "type": "number" },
+        { "key": "fdatasync", "label": "fdatasync", "type": "number" },
+        { "key": "sync_file_range", "label": "sync_file_range", "type": "text", "placeholder": "wait_before,write:8" },
+        { "key": "verify", "label": "verify", "type": "select", "options": ["md5", "crc32c", "sha1", "sha256", "meta"] }
+      ]
+    },
+    {
+      "id": "rate",
+      "title": "速率 / 并发控制",
+      "collapsedByDefault": true,
+      "fields": [
+        { "key": "rate", "label": "rate", "type": "text", "placeholder": "500M" },
+        { "key": "rate_iops", "label": "rate_iops", "type": "number", "placeholder": "10000" },
+        { "key": "rate_min", "label": "rate_min", "type": "text", "placeholder": "100M" },
+        { "key": "rate_process", "label": "rate_process", "type": "select", "options": ["linear", "poisson"] },
+        { "key": "thinktime", "label": "thinktime", "type": "number", "placeholder": "0" },
+        { "key": "iodepth_batch_submit", "label": "iodepth_batch_submit", "type": "number", "placeholder": "1" },
+        { "key": "iodepth_batch_complete", "label": "iodepth_batch_complete", "type": "number", "placeholder": "1" }
+      ]
+    },
+    {
+      "id": "distribution",
+      "title": "访问分布 / 偏移",
+      "collapsedByDefault": true,
+      "fields": [
+        { "key": "offset", "label": "offset", "type": "text", "placeholder": "0" },
+        { "key": "offset_increment", "label": "offset_increment", "type": "text", "placeholder": "1G" },
+        { "key": "random_distribution", "label": "random_distribution", "type": "select", "options": ["random", "zipf", "pareto", "normal", "zoned", "zoned_abs"] },
+        { "key": "random_generator", "label": "random_generator", "type": "select", "options": ["tausworthe", "lfsr", "tausworthe64"] },
+        { "key": "norandommap", "label": "norandommap", "type": "boolean" },
+        { "key": "randrepeat", "label": "randrepeat", "type": "boolean" },
+        { "key": "rwmixread", "label": "rwmixread", "type": "number", "placeholder": "50" },
+        { "key": "rwmixwrite", "label": "rwmixwrite", "type": "number", "placeholder": "50" }
+      ]
+    },
+    {
+      "id": "advanced",
+      "title": "高级 / 兼容参数",
+      "collapsedByDefault": true,
+      "fields": [
+        { "key": "group_reporting", "label": "group_reporting", "type": "boolean" },
+        { "key": "stonewall", "label": "stonewall", "type": "boolean" },
+        { "key": "new_group", "label": "new_group", "type": "boolean" },
+        { "key": "thread", "label": "thread", "type": "boolean" },
+        { "key": "cpus_allowed", "label": "cpus_allowed", "type": "text", "placeholder": "0-3" },
+        { "key": "cpus_allowed_policy", "label": "cpus_allowed_policy", "type": "select", "options": ["shared", "split"] },
+        { "key": "prio", "label": "prio", "type": "number" },
+        { "key": "prioclass", "label": "prioclass", "type": "number" },
+        { "key": "serialize_overlap", "label": "serialize_overlap", "type": "boolean" },
+        { "key": "eta", "label": "eta", "type": "select", "options": ["always", "never", "auto"] }
+      ]
+    }
+  ]
+}
