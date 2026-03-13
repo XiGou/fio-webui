@@ -249,7 +249,10 @@ export function WorkflowStudioPage() {
   const canConnect = (sourceId: string, targetId: string) => {
     const source = nodes.find((node) => node.id === sourceId)
     const target = nodes.find((node) => node.id === targetId)
-    return isConnectionLegal(source, target)
+    if (!isConnectionLegal(source, target)) {
+      return false
+    }
+    return !edges.some((edge) => edge.source === sourceId && edge.target === targetId)
   }
 
   const renderFioField = (field: FioParamField) => {

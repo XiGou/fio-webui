@@ -14,6 +14,9 @@ type CanvasProps = {
   canConnect?: (source: string, target: string) => boolean
 }
 
+const NODE_WIDTH = 190
+const NODE_HEIGHT = 92
+
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
 export function Canvas({
@@ -31,6 +34,7 @@ export function Canvas({
   const [viewport, setViewport] = useState({ x: 240, y: 160, zoom: 1 })
   const [draggingNode, setDraggingNode] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null)
+  const [connectionCursor, setConnectionCursor] = useState<{ x: number; y: number } | null>(null)
   const [selectingRect, setSelectingRect] = useState<
     | {
         start: { x: number; y: number }
@@ -56,7 +60,7 @@ export function Canvas({
   }
 
   const onNodePointerDown = (event: PointerEvent<HTMLDivElement>, nodeId: string) => {
-    if (event.button !== 0) {
+    if (event.button !== 0 || connectingFrom) {
       return
     }
     event.stopPropagation()
@@ -88,6 +92,7 @@ export function Canvas({
 
     if (connectingFrom) {
       setConnectingFrom(null)
+      setConnectionCursor(null)
       return
     }
 
@@ -100,16 +105,20 @@ export function Canvas({
   }
 
   const onCanvasPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const world = getWorldPos(event)
+
     if (draggingNode) {
-      const world = getWorldPos(event)
       onNodeMove(draggingNode.id, {
         x: world.x - draggingNode.dx,
         y: world.y - draggingNode.dy,
       })
     }
 
+    if (connectingFrom) {
+      setConnectionCursor(world)
+    }
+
     if (selectingRect) {
-      const world = getWorldPos(event)
       setSelectingRect((previous) => (previous ? { ...previous, end: world } : previous))
     }
 
@@ -133,7 +142,7 @@ export function Canvas({
         .filter((node) => {
           const nx = node.position.x
           const ny = node.position.y
-          return nx + 190 >= minX && nx <= maxX && ny + 92 >= minY && ny <= maxY
+          return nx + NODE_WIDTH >= minX && nx <= maxX && ny + NODE_HEIGHT >= minY && ny <= maxY
         })
         .map((node) => node.id)
 
@@ -141,6 +150,25 @@ export function Canvas({
       setSelectingRect(null)
     }
   }
+
+  const temporaryPath = useMemo(() => {
+    if (!connectingFrom || !connectionCursor) {
+      return null
+    }
+
+    const sourceNode = nodesById.get(connectingFrom)
+    if (!sourceNode) {
+      return null
+    }
+
+    const sx = sourceNode.position.x + NODE_WIDTH
+    const sy = sourceNode.position.y + NODE_HEIGHT / 2
+    const tx = connectionCursor.x
+    const ty = connectionCursor.y
+    const cx = Math.max(36, Math.abs(tx - sx) * 0.5)
+
+    return `M ${sx} ${sy} C ${sx + cx} ${sy}, ${tx - cx} ${ty}, ${tx} ${ty}`
+  }, [connectingFrom, connectionCursor, nodesById])
 
   return (
     <div
@@ -166,6 +194,9 @@ export function Canvas({
           {edges.map((edge) => (
             <EdgeRenderer key={edge.id} edge={edge} nodesById={nodesById} invalid={invalidEdgeIds.has(edge.id)} />
           ))}
+          {temporaryPath ? (
+            <path d={temporaryPath} fill="none" stroke="#2563eb" strokeWidth={2} strokeDasharray="5 4" />
+          ) : null}
         </svg>
 
         {nodes.map((node) => (
@@ -174,7 +205,16 @@ export function Canvas({
               node={node}
               selected={selectedNodeIds.includes(node.id)}
               invalid={invalidNodeIds.has(node.id)}
-              onStartConnect={(source) => setConnectingFrom(source)}
+              onStartConnect={(source) => {
+                setConnectingFrom(source)
+                const sourceNode = nodesById.get(source)
+                if (sourceNode) {
+                  setConnectionCursor({
+                    x: sourceNode.position.x + NODE_WIDTH,
+                    y: sourceNode.position.y + NODE_HEIGHT / 2,
+                  })
+                }
+              }}
               onCompleteConnect={(target) => {
                 if (connectingFrom) {
                   if (!canConnect || canConnect(connectingFrom, target)) {
@@ -182,6 +222,7 @@ export function Canvas({
                   }
                 }
                 setConnectingFrom(null)
+                setConnectionCursor(null)
               }}
               onPointerDown={onNodePointerDown}
             />
