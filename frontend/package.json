@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "setup:ui-harness": "npx skills add pbakaus/impeccable --yes --global",
+    "dev": "npm run setup:ui-harness && vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

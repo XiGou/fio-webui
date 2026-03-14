@@ -8,9 +8,11 @@ interface StatsChartProps {
   title: string
   type: 'iops' | 'bw' | 'lat'
   height?: number
+  xDomain?: { min: number; max: number } | null
+  onDomainChange?: (domain: { min: number; max: number }) => void
 }
 
-export function StatsChart({ data, title, type, height = 300 }: StatsChartProps) {
+export function StatsChart({ data, title, type, height = 300, xDomain, onDomainChange }: StatsChartProps) {
   const chartRef = useRef<HTMLDivElement>(null)
   const plotRef = useRef<uPlot | null>(null)
   const [width, setWidth] = useState(800)
@@ -141,6 +143,22 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
         show: true,
         x: true,
         y: true,
+        drag: {
+          x: true,
+          y: false,
+          setScale: true,
+        },
+      },
+      hooks: {
+        setScale: [
+          (u, key) => {
+            if (key === 'x' && onDomainChange) {
+              const min = Number(u.scales.x.min ?? 0)
+              const max = Number(u.scales.x.max ?? maxX)
+              onDomainChange({ min, max })
+            }
+          },
+        ],
       },
     }
 
@@ -153,15 +171,19 @@ export function StatsChart({ data, title, type, height = 300 }: StatsChartProps)
         // type 没变，直接 setData 复用
         plotRef.current.setData(plotData, false)
         plotRef.current.setSize({ width: safeWidth, height })
-        plotRef.current.setScale('x', { min: 0, max: maxX })
+        const domain = xDomain ?? { min: 0, max: maxX }
+        plotRef.current.setScale('x', domain)
       }
     }
     prevTypeRef.current = type
 
     if (!plotRef.current) {
       plotRef.current = new uPlot(opts, plotData, chartRef.current!)
+      if (xDomain) {
+        plotRef.current.setScale('x', xDomain)
+      }
     }
-  }, [data, type, title, width, height])
+  }, [data, type, title, width, height, xDomain, onDomainChange])
 
   // Destroy only on unmount
   useEffect(() => {

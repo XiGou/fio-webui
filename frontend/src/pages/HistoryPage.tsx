@@ -213,19 +213,20 @@ export function HistoryPage() {
   }, [deleteRuns, onAction, selectedRunIds])
 
   const statusColor = (status: string) => {
-    if (status === 'finished') return 'text-green-600'
-    if (status === 'error') return 'text-red-600'
-    if (status === 'running') return 'text-blue-600'
+    if (status === 'finished') return 'status-success'
+    if (status === 'error') return 'status-failure'
+    if (status === 'running') return 'status-running'
+    if (status === 'idle') return 'status-warning'
     return 'text-muted-foreground'
   }
 
   if (loading) return <div className="flex items-center justify-center py-12"><p className="text-muted-foreground">加载中...</p></div>
 
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="space-y-4">
+      <div className="space-y-1">
         <h2 className="text-lg font-semibold text-foreground flex items-center gap-2"><History className="h-5 w-5" />历史任务</h2>
-        <p className="text-sm text-muted-foreground mt-1">快捷键：Ctrl/Cmd+K 搜索，Ctrl/Cmd+Enter 复制运行，Ctrl/Cmd+E 导出，Delete 删除。</p>
+        <p className="text-sm text-muted-foreground">快捷键：Ctrl/Cmd+K 搜索，Ctrl/Cmd+Enter 复制运行，Ctrl/Cmd+E 导出，Delete 删除。</p>
       </div>
       <div className="grid grid-cols-1 gap-4 2xl:grid-cols-12">
         <div className="2xl:col-span-5">
