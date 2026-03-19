@@ -18,13 +18,14 @@ var upgrader = websocket.Upgrader{
 }
 
 type Server struct {
-	executor   *fio.Executor
-	runStore   *fio.RunStore
-	staticFS   fs.FS
-	addr       string
-	debug      bool
-	dataDir    string
-	shutdownCh chan struct{}
+	executor      *fio.Executor
+	runStore      *fio.RunStore
+	workflowStore *fio.WorkflowTemplateStore
+	staticFS      fs.FS
+	addr          string
+	debug         bool
+	dataDir       string
+	shutdownCh    chan struct{}
 }
 
 func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, error) {
@@ -39,6 +40,10 @@ func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, erro
 	if err != nil {
 		return nil, err
 	}
+	workflowStore, err := fio.NewWorkflowTemplateStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	exec := fio.NewExecutor(dataDir, store)
 	if debug {
 		log.Printf("Data directory: %s", dataDir)
@@ -48,13 +53,14 @@ func New(addr string, webFS embed.FS, debug bool, dataDir string) (*Server, erro
 		return nil, err
 	}
 	return &Server{
-		executor:   exec,
-		runStore:   store,
-		staticFS:   distFS,
-		addr:       addr,
-		debug:      debug,
-		dataDir:    dataDir,
-		shutdownCh: make(chan struct{}),
+		executor:      exec,
+		runStore:      store,
+		workflowStore: workflowStore,
+		staticFS:      distFS,
+		addr:          addr,
+		debug:         debug,
+		dataDir:       dataDir,
+		shutdownCh:    make(chan struct{}),
 	}, nil
 }
 
@@ -71,13 +77,15 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/api/events", s.handleWebSocket)
 	mux.HandleFunc("/api/runs", s.handleRuns)
 	mux.HandleFunc("/api/runs/", s.handleRuns)
+	mux.HandleFunc("/api/workflows", s.handleWorkflows)
+	mux.HandleFunc("/api/workflows/", s.handleWorkflows)
 	if s.debug {
 		mux.HandleFunc("/api/debug/files", s.handleDebugFiles)
 		log.Println("Debug mode enabled")
 	}
 	mux.Handle("/", http.FileServer(http.FS(s.staticFS)))
 
-	srv := &http.Server{ Addr: s.addr, Handler: mux }
+	srv := &http.Server{Addr: s.addr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("HTTP server error: %v", err)

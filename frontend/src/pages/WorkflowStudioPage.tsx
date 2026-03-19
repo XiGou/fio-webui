@@ -7,6 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Canvas } from '@/components/workflow/Canvas'
 import fioParameters from '@/data/fio-parameters.json'
 import { taskListToWorkflow } from '@/lib/workflowMapper'
+import { createWorkflowTemplate, listWorkflowTemplates, publishWorkflowTemplateVersion, getWorkflowTemplate } from '@/lib/workflowTemplates'
+import type { WorkflowTemplateMeta } from '@/types/workflowTemplates'
 import { WORKFLOW_NODE_TYPE } from '@/types/workflow'
 import type { WorkflowCanvasEdge } from '@/components/workflow/EdgeRenderer'
 import type { WorkflowCanvasNode, WorkflowNodeKind } from '@/components/workflow/NodeRenderer'
@@ -309,8 +311,20 @@ export function WorkflowStudioPage() {
   const [compileResult, setCompileResult] = useState<CompileResult | null>(null)
   const [runError, setRunError] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [templates, setTemplates] = useState<WorkflowTemplateMeta[]>([])
+  const [templateError, setTemplateError] = useState('')
   const location = useLocation()
   const navigate = useNavigate()
+
+  const refreshTemplates = async () => {
+    try {
+      const list = await listWorkflowTemplates()
+      setTemplates(list)
+      setTemplateError('')
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : '加载模板失败')
+    }
+  }
 
   useEffect(() => {
     const restoreRunConfig = location.state?.restoreRunConfig as FioTaskList | undefined
@@ -354,6 +368,10 @@ export function WorkflowStudioPage() {
     setValidation({ errors: [], invalidNodeIds: new Set(), invalidEdgeIds: new Set() })
     navigate('/', { replace: true, state: {} })
   }, [location.state, navigate])
+
+  useEffect(() => {
+    refreshTemplates()
+  }, [])
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -437,6 +455,62 @@ export function WorkflowStudioPage() {
     navigate(`/monitor${runState?.id ? `?runId=${runState.id}` : ''}`)
   }
 
+  const currentWorkflowPayload = { schemaVersion: 2, nodes, edges }
+
+  const saveAsTemplate = async () => {
+    const name = window.prompt('模板名称', `workflow-${Date.now().toString(36)}`)
+    if (!name) return
+    const id = name.trim().toLowerCase().replace(/\s+/g, '-')
+    try {
+      await createWorkflowTemplate({
+        id,
+        name: name.trim(),
+        description: '来自 Studio 保存',
+        tags: ['studio', 'custom'],
+        created_by: 'studio-user',
+        workflow: currentWorkflowPayload,
+        schema_version: 2,
+      })
+      await refreshTemplates()
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : '保存模板失败')
+    }
+  }
+
+  const createFromTemplate = async (id: string) => {
+    try {
+      const tpl = await getWorkflowTemplate(id)
+      const wf = tpl.latest.workflow as unknown as { nodes?: WorkflowCanvasNode[]; edges?: WorkflowCanvasEdge[] }
+      if (!wf?.nodes?.length) throw new Error('模板内容为空')
+      setNodes(wf.nodes)
+      setEdges(wf.edges ?? [])
+      setSelectedNodeIds([])
+      setSelectedEdgeIds([])
+      setCompileResult(null)
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : '从模板新建失败')
+    }
+  }
+
+  const publishTemplateVersion = async () => {
+    const id = window.prompt('发布到模板 ID', templates[0]?.id ?? '')
+    if (!id) return
+    try {
+      const published = await publishWorkflowTemplateVersion(id, {
+        created_by: 'studio-user',
+        change_log: 'studio publish',
+        schema_version: 1,
+        workflow: currentWorkflowPayload,
+      })
+      await refreshTemplates()
+      if (published.migration_hint) {
+        window.alert(`兼容提示: ${published.migration_hint}\n自动迁移脚本: ${published.auto_migration_script ?? '-'}`)
+      }
+    } catch (error) {
+      setTemplateError(error instanceof Error ? error.message : '发布模板版本失败')
+    }
+  }
+
   const renderFioField = (field: FioParamField) => {
     const value = selectedNode?.data[field.key]
 
@@ -495,6 +569,9 @@ export function WorkflowStudioPage() {
             <Button size="sm" variant="outline" onClick={() => setLibraryOpen((v) => !v)}>{libraryOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} 节点库</Button>
             <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
             <Button size="sm" variant="outline" onClick={compileWorkflow}>编译并预览</Button>
+            <Button size="sm" variant="outline" onClick={saveAsTemplate}>保存为模板</Button>
+            <Button size="sm" variant="outline" onClick={() => templates[0] && createFromTemplate(templates[0].id)} disabled={templates.length === 0}>从模板新建</Button>
+            <Button size="sm" variant="outline" onClick={publishTemplateVersion}>发布模板版本</Button>
             <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行</Button>
             <Button size="sm" variant="outline" onClick={() => navigate('/monitor')}>实时状态</Button>
             <Button
@@ -561,6 +638,17 @@ export function WorkflowStudioPage() {
               <div className="relative mb-3">
                 <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
                 <Input className="pl-8" placeholder="搜索预设或自定义节点" value={librarySearch} onChange={(event) => setLibrarySearch(event.target.value)} />
+              </div>
+              {templateError ? <p className="mb-2 text-xs text-red-500">{templateError}</p> : null}
+              <div className="mb-3 rounded border border-border p-2">
+                <p className="text-xs font-medium">模板库（{templates.length}）</p>
+                <div className="mt-2 space-y-1">
+                  {templates.slice(0, 6).map((tpl) => (
+                    <button key={tpl.id} className="w-full rounded border border-border px-2 py-1 text-left text-xs hover:bg-muted" onClick={() => createFromTemplate(tpl.id)}>
+                      {tpl.name} · v{tpl.version}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="space-y-2 overflow-auto pr-1">
                 {visiblePresets.map((preset) => (

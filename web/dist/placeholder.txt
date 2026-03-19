@@ -1,0 +1,2 @@
+Placeholder file to keep `web/dist` embeddable in source control.
+Run `cd frontend && npm run build` to generate the real frontend assets.
