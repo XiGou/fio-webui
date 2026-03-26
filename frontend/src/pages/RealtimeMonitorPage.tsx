@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatsChart } from '@/components/StatsChart'
+import { filterStatsByTimeRange } from '@/lib/statsFormat'
 import type { FioTaskList, LogSummary, RunRecord, RunState, StatsDataPoint, WsMessage } from '@/types/api'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -29,7 +30,19 @@ export function RealtimeMonitorPage() {
   const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
   const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
   const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
+  const [timeRange, setTimeRange] = useState<'15m' | '1h' | '6h' | '24h' | 'all'>('all')
+  const [xDomain, setXDomain] = useState<{ min: number; max: number } | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const selectedRunIdRef = useRef(selectedRunId)
+  const runStateRef = useRef<RunState | null>(runState)
+
+  useEffect(() => {
+    selectedRunIdRef.current = selectedRunId
+  }, [selectedRunId])
+
+  useEffect(() => {
+    runStateRef.current = runState
+  }, [runState])
 
   const normalizeStatsPoint = useCallback((raw: unknown): StatsDataPoint | null => {
     if (!raw || typeof raw !== 'object') return null
@@ -103,6 +116,20 @@ export function RealtimeMonitorPage() {
             setSelectedRunId(status.id)
           }
           fetchRuns()
+        } else if (msg.type === 'stats') {
+          const status = runStateRef.current
+          if (!status?.id || selectedRunIdRef.current && selectedRunIdRef.current !== status.id) return
+          const point = normalizeStatsPoint(msg.data)
+          if (!point) return
+          setStatsData((prev) => {
+            const last = prev[prev.length - 1]
+            if (last && last.time === point.time) {
+              const next = [...prev]
+              next[next.length - 1] = point
+              return next
+            }
+            return [...prev, point]
+          })
         }
       } catch {
         // ignore
@@ -113,10 +140,11 @@ export function RealtimeMonitorPage() {
       ws.close()
       wsRef.current = null
     }
-  }, [fetchRuns, selectedRunId])
+  }, [fetchRuns, normalizeStatsPoint, selectedRunId])
 
   const activeRunId = selectedRunId || runState?.id || ''
   const activeRun = useMemo(() => runs.find((item) => item.id === activeRunId) ?? null, [runs, activeRunId])
+  const visibleStatsData = useMemo(() => filterStatsByTimeRange(statsData, timeRange), [statsData, timeRange])
 
   const fetchRunData = useCallback(async (runId: string) => {
     if (!runId) return
@@ -166,6 +194,7 @@ export function RealtimeMonitorPage() {
 
   const onSelectRun = (runId: string) => {
     setSelectedRunId(runId)
+    setXDomain(null)
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev)
       next.set('runId', runId)
@@ -219,20 +248,33 @@ export function RealtimeMonitorPage() {
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
             <CardTitle className="text-base">性能统计图</CardTitle>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap justify-end">
+              {(['15m', '1h', '6h', '24h', 'all'] as const).map((range) => (
+                <Button key={range} size="sm" variant={timeRange === range ? 'default' : 'outline'} onClick={() => { setTimeRange(range); setXDomain(null) }}>
+                  {range.toUpperCase()}
+                </Button>
+              ))}
               {(['iops', 'bw', 'lat'] as const).map((key) => (
                 <Button key={key} size="sm" variant={statsTab === key ? 'default' : 'outline'} onClick={() => setStatsTab(key)}>
                   {key.toUpperCase()}
                 </Button>
               ))}
+              <Button size="sm" variant="outline" onClick={() => setXDomain(null)}>重置缩放</Button>
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {statsData.length > 0 ? (
-            <StatsChart data={statsData} title={`Run ${activeRunId.slice(0, 8)} 实时性能`} type={statsTab} height={Math.max(520, window.innerHeight - 320)} />
+          {visibleStatsData.length > 0 ? (
+            <StatsChart
+              data={visibleStatsData}
+              title={`Run ${activeRunId.slice(0, 8)} 实时性能`}
+              type={statsTab}
+              height={Math.max(520, window.innerHeight - 320)}
+              xDomain={xDomain}
+              onDomainChange={setXDomain}
+            />
           ) : (
-            <p className="text-sm text-muted-foreground">暂无性能数据</p>
+            <p className="text-sm text-muted-foreground">当前时间范围内暂无性能数据</p>
           )}
         </CardContent>
       </Card>
