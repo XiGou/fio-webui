@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatsChart } from '@/components/StatsChart'
+import { filterStatsByTimeRange } from '@/lib/statsFormat'
 import type { FioTaskList, LogSummary, RunRecord, RunState, StatsDataPoint, WsMessage } from '@/types/api'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -143,17 +144,14 @@ export function RealtimeMonitorPage() {
 
   const activeRunId = selectedRunId || runState?.id || ''
   const activeRun = useMemo(() => runs.find((item) => item.id === activeRunId) ?? null, [runs, activeRunId])
+  const visibleStatsData = useMemo(() => filterStatsByTimeRange(statsData, timeRange), [statsData, timeRange])
 
   const fetchRunData = useCallback(async (runId: string) => {
     if (!runId) return
     try {
-      const now = Math.floor(Date.now() / 1000)
-      const rangeSeconds: Record<'15m' | '1h' | '6h' | '24h', number> = { '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 }
-      const from = timeRange === 'all' ? 0 : now - rangeSeconds[timeRange]
-      const statsURL = from > 0 ? `/api/runs/${runId}/stats?from=${from}` : `/api/runs/${runId}/stats`
       const [detailRes, statsRes, logRes] = await Promise.all([
         fetch(`/api/runs/${runId}`),
-        fetch(statsURL),
+        fetch(`/api/runs/${runId}/stats`),
         fetch(`/api/runs/${runId}/log-summary`),
       ])
 
@@ -177,7 +175,7 @@ export function RealtimeMonitorPage() {
     } catch {
       // ignore
     }
-  }, [normalizeStatsPoint, timeRange])
+  }, [normalizeStatsPoint])
 
   useEffect(() => {
     if (!activeRunId) return
@@ -266,9 +264,9 @@ export function RealtimeMonitorPage() {
           </div>
         </CardHeader>
         <CardContent>
-          {statsData.length > 0 ? (
+          {visibleStatsData.length > 0 ? (
             <StatsChart
-              data={statsData}
+              data={visibleStatsData}
               title={`Run ${activeRunId.slice(0, 8)} 实时性能`}
               type={statsTab}
               height={Math.max(520, window.innerHeight - 320)}
@@ -276,7 +274,7 @@ export function RealtimeMonitorPage() {
               onDomainChange={setXDomain}
             />
           ) : (
-            <p className="text-sm text-muted-foreground">暂无性能数据</p>
+            <p className="text-sm text-muted-foreground">当前时间范围内暂无性能数据</p>
           )}
         </CardContent>
       </Card>

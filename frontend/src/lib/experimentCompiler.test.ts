@@ -6,8 +6,8 @@ describe('compileExperimentToTaskList', () => {
     const exp = defaultExperiment()
     exp.stages[0].mode = 'sequential'
     exp.stages[0].jobs = [
-      { ...exp.stages[0].jobs[0], id: 'j1', name: 'j1' },
-      { ...exp.stages[0].jobs[0], id: 'j2', name: 'j2' },
+      { ...exp.stages[0].jobs[0], id: 'j1', name: 'j1', overrides: { ...exp.stages[0].jobs[0].overrides } },
+      { ...exp.stages[0].jobs[0], id: 'j2', name: 'j2', overrides: { ...exp.stages[0].jobs[0].overrides } },
     ]
 
     const result = compileExperimentToTaskList(exp)

@@ -84,6 +84,7 @@ export function WorkflowStudioPage() {
             <StageCard
               key={stage.id}
               stage={stage}
+              experimentGlobal={experiment.global}
               selectedStageId={selectedStageId}
               selectedJobId={selectedJobId}
               onSelectStage={() => {
@@ -105,6 +106,7 @@ export function WorkflowStudioPage() {
           <CardHeader><CardTitle>Inspector</CardTitle></CardHeader>
           <CardContent>
             <InspectorPanel
+              experimentGlobal={experiment.global}
               stage={selectedStage}
               job={selectedJob}
               onUpdateStage={(patch) => selectedStage && updateStage(selectedStage.id, patch)}

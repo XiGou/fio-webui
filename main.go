@@ -10,7 +10,7 @@ import (
 	"github.com/gouxi/fio-webui/internal/server"
 )
 
-//go:embed web/dist/* web/report-template/*
+//go:embed web
 var webFS embed.FS
 
 func main() {

@@ -2,6 +2,8 @@ package fio
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +52,7 @@ type JobConfig struct {
 	Runtime        int    `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
 	IOEngine       string `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
 	NodeID         string `json:"nodeId,omitempty"`         // Source workflow node ID for traceability
+	ExtraOptions   map[string]any `json:"extra_options,omitempty"`
 }
 
 type FioConfig struct {
@@ -133,29 +136,12 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	if jobIndex == -1 {
 		for i, job := range c.Jobs {
 			sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
-			// Stonewall at the start of this job section means "wait for previous jobs to complete before starting this one"
-			if i > 0 && job.StonewallAfter {
+			// Stonewall is emitted at the start of the next job section when the
+			// previous job requested "stonewall after".
+			if i > 0 && c.Jobs[i-1].StonewallAfter {
 				sb.WriteString("stonewall\n")
 			}
-			// Job-level overrides for runtime and ioengine
-			if job.IOEngine != "" {
-				sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
-			}
-			if job.Runtime > 0 {
-				sb.WriteString(fmt.Sprintf("runtime=%d\n", job.Runtime))
-			}
-			sb.WriteString(fmt.Sprintf("filename=%s\n", job.Filename))
-			sb.WriteString(fmt.Sprintf("rw=%s\n", job.RW))
-			sb.WriteString(fmt.Sprintf("bs=%s\n", job.BS))
-			sb.WriteString(fmt.Sprintf("size=%s\n", job.Size))
-			sb.WriteString(fmt.Sprintf("numjobs=%d\n", job.NumJobs))
-			sb.WriteString(fmt.Sprintf("iodepth=%d\n", job.IODepth))
-			if job.RW == RWRandRW || job.RW == RWReadWrite || job.RW == "rw" {
-				sb.WriteString(fmt.Sprintf("rwmixread=%d\n", job.RWMixRead))
-			}
-			if job.Rate != "" {
-				sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
-			}
+			writeJobConfig(&sb, job)
 		}
 		return sb.String()
 	}
@@ -167,6 +153,12 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	job := c.Jobs[jobIndex]
 
 	sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
+	writeJobConfig(&sb, job)
+
+	return sb.String()
+}
+
+func writeJobConfig(sb *strings.Builder, job JobConfig) {
 	// Job-level overrides for runtime and ioengine
 	if job.IOEngine != "" {
 		sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
@@ -186,6 +178,57 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	if job.Rate != "" {
 		sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
 	}
+	writeExtraOptions(sb, job.ExtraOptions)
+}
 
-	return sb.String()
+func writeExtraOptions(sb *strings.Builder, options map[string]any) {
+	if len(options) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(options))
+	for key := range options {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		sb.WriteString(fmt.Sprintf("%s=%s\n", key, formatOptionValue(options[key])))
+	}
+}
+
+func formatOptionValue(value any) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "1"
+		}
+		return "0"
+	case string:
+		return typed
+	case int:
+		return strconv.Itoa(typed)
+	case int8:
+		return strconv.FormatInt(int64(typed), 10)
+	case int16:
+		return strconv.FormatInt(int64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		return fmt.Sprint(typed)
+	}
 }
