@@ -1,0 +1,66 @@
+{
+  "name": "fio-webui",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "args": {
+      "VARIANT": "bookworm",
+      "APT_MIRROR": "https://mirrors.tuna.tsinghua.edu.cn/debian",
+      "APT_SECURITY_MIRROR": "https://mirrors.tuna.tsinghua.edu.cn/debian-security"
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "installOhMyZsh": false,
+      "username": "vscode"
+    },
+    "ghcr.io/devcontainers/features/go:1": {
+      "version": "1.26"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22",
+      "nodeGypDependencies": true
+    }
+  },
+  "containerEnv": {
+    "NPM_CONFIG_PREFIX": "/home/vscode/.npm-global",
+    "NPM_CONFIG_REGISTRY": "https://registry.npmmirror.com",
+    "FIO_WEBUI_NPM_REGISTRY": "https://registry.npmmirror.com",
+    "GOPROXY": "https://goproxy.cn,direct"
+  },
+  "remoteEnv": {
+    "PATH": "/home/vscode/.npm-global/bin:${containerEnv:PATH}"
+  },
+  "forwardPorts": [
+    5173,
+    8080
+  ],
+  "portsAttributes": {
+    "5173": {
+      "label": "Vite Dev Server",
+      "onAutoForward": "notify"
+    },
+    "8080": {
+      "label": "Go Backend",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      },
+      "extensions": [
+        "golang.go",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-vscode.vscode-typescript-next",
+        "ms-azuretools.vscode-docker",
+        "openai.chatgpt"
+      ]
+    }
+  },
+  "remoteUser": "vscode"
+}
