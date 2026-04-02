@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatsChart } from '@/components/StatsChart'
+import { filterStatsByTimeRange } from '@/lib/statsFormat'
 import type { FioTaskList, StatsDataPoint } from '@/types/api'
 import type { HistoryAction, RunDetail } from './types'
 
@@ -27,12 +28,7 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, onStat
   const [zoomWindow, setZoomWindow] = useState({ start: 0, end: 100 })
   const [xDomain, setXDomain] = useState<{ min: number; max: number } | null>(null)
 
-  const filteredStats = statsRange === 'all' || statsData.length === 0 ? statsData : (() => {
-    const secMap = { '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 } as const
-    const tail = statsData[statsData.length - 1]?.time ?? 0
-    const threshold = tail - secMap[statsRange]
-    return statsData.filter((item) => item.time >= threshold)
-  })()
+  const filteredStats = useMemo(() => filterStatsByTimeRange(statsData, statsRange), [statsData, statsRange])
 
   const zoomedStats = useMemo(() => {
     if (filteredStats.length === 0) return filteredStats

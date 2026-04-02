@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Experiment, ExperimentJob } from '@/types/experiment'
-import { compileExperimentToTaskList, defaultExperiment, defaultJob } from '@/lib/experimentCompiler'
+import { compileExperimentToTaskList, defaultExperiment, defaultJob, defaultStage } from '@/lib/experimentCompiler'
 
 const uid = (p: string) => `${p}-${typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`
 
@@ -13,9 +13,9 @@ export function useBuilderStore() {
   const selectedJob = useMemo(() => selectedStage?.jobs.find((j) => j.id === selectedJobId) ?? null, [selectedStage, selectedJobId])
 
   const addStage = () => {
-    const id = uid('stage')
-    setExperiment((prev) => ({ ...prev, stages: [...prev.stages, { id, name: `Stage ${prev.stages.length + 1}`, mode: 'sequential', jobs: [defaultJob()] }] }))
-    setSelectedStageId(id)
+    const stage = { ...defaultStage(), id: uid('stage'), name: `Stage ${experiment.stages.length + 1}` }
+    setExperiment((prev) => ({ ...prev, stages: [...prev.stages, stage] }))
+    setSelectedStageId(stage.id)
     setSelectedJobId(null)
   }
 

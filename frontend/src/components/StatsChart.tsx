@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import type { StatsDataPoint } from '@/types/api'
+import { describeMetricPresentation } from '@/lib/statsFormat'
 
 interface StatsChartProps {
   data: StatsDataPoint[]
@@ -61,38 +62,38 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
     times = times.map((t) => t - t0)
 
     let series: uPlot.Series[] = []
-    let values: number[][] = []
+    let rawValues: number[][] = []
 
     if (type === 'iops') {
       series = [
-        { label: 'Total IOPS', stroke: '#2563eb', width: 2 },
-        { label: 'Read IOPS', stroke: '#10b981', width: 2 },
-        { label: 'Write IOPS', stroke: '#f59e0b', width: 2 },
+        { label: 'Total', stroke: '#2563eb', width: 2 },
+        { label: 'Read', stroke: '#10b981', width: 2 },
+        { label: 'Write', stroke: '#f59e0b', width: 2 },
       ]
-      values = [
+      rawValues = [
         data.map((d) => d.iops),
         data.map((d) => d.iopsRead),
         data.map((d) => d.iopsWrite),
       ]
     } else if (type === 'bw') {
       series = [
-        { label: 'Total BW (MB/s)', stroke: '#2563eb', width: 2 },
-        { label: 'Read BW (MB/s)', stroke: '#10b981', width: 2 },
-        { label: 'Write BW (MB/s)', stroke: '#f59e0b', width: 2 },
+        { label: 'Total', stroke: '#2563eb', width: 2 },
+        { label: 'Read', stroke: '#10b981', width: 2 },
+        { label: 'Write', stroke: '#f59e0b', width: 2 },
       ]
-      values = [
+      rawValues = [
         data.map((d) => d.bw),
         data.map((d) => d.bwRead),
         data.map((d) => d.bwWrite),
       ]
     } else if (type === 'lat') {
       series = [
-        { label: 'Mean (ms)', stroke: '#2563eb', width: 2 },
-        { label: 'P95 (ms)', stroke: '#f59e0b', width: 2 },
-        { label: 'P99 (ms)', stroke: '#ef4444', width: 2 },
-        { label: 'Max (ms)', stroke: '#8b5cf6', width: 2 },
+        { label: 'Mean', stroke: '#2563eb', width: 2 },
+        { label: 'P95', stroke: '#f59e0b', width: 2 },
+        { label: 'P99', stroke: '#ef4444', width: 2 },
+        { label: 'Max', stroke: '#8b5cf6', width: 2 },
       ]
-      values = [
+      rawValues = [
         data.map((d) => d.latMean),
         data.map((d) => d.latP95),
         data.map((d) => d.latP99),
@@ -100,6 +101,8 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
       ]
     }
 
+    const presentation = describeMetricPresentation(type, rawValues.flat())
+    const values = rawValues.map((seriesValues) => seriesValues.map((value) => presentation.transform(value)))
     const plotData: uPlot.AlignedData = [times, ...values]
 
     const safeWidth = Math.max(1, width)
@@ -117,7 +120,12 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
       height,
       series: [
         { label: 'Time (s)' },
-        ...series,
+        ...series.map((item) => ({
+          ...item,
+          label: `${item.label} (${presentation.unit})`,
+          value: (_u: uPlot, value: number | null) =>
+            value == null ? '' : `${Number(value).toFixed(Math.abs(Number(value)) >= 10 ? 0 : 2)} ${presentation.unit}`,
+        })),
       ],
       axes: [
         {
@@ -126,9 +134,10 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
           grid: { show: true, stroke: '#e5e7eb', width: 1 },
         },
         {
-          label: type === 'iops' ? 'IOPS' : type === 'bw' ? 'MB/s' : 'ms',
+          label: presentation.axisLabel,
           stroke: '#666',
           grid: { show: true, stroke: '#e5e7eb', width: 1 },
+          values: (_u, splits) => splits.map((split) => `${Number(split).toFixed(Math.abs(Number(split)) >= 10 ? 0 : 1)}`),
         },
       ],
       scales: {

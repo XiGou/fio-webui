@@ -16,10 +16,19 @@ type RunReportDTO struct {
 	Meta       *RunMeta          `json:"meta"`
 	Config     *RunConfig        `json:"config"`
 	Stats      []StatsDataPoint  `json:"stats"`
+	Summary    *ReportSummary    `json:"summary,omitempty"`
 	LogSummary *LogSummary       `json:"log_summary"`
 	Errors     []string          `json:"errors"`
 	View       *ReportViewConfig `json:"view,omitempty"`
 	ExportedAt string            `json:"exported_at"`
+}
+
+type ReportSummary struct {
+	SampleCount      int     `json:"sample_count"`
+	DurationSeconds  int64   `json:"duration_seconds"`
+	PeakIOPS         float64 `json:"peak_iops"`
+	PeakBandwidthMiB float64 `json:"peak_bandwidth_mib"`
+	PeakLatencyMs    float64 `json:"peak_latency_ms"`
 }
 
 func (s *RunStore) BuildRunReport(runID string, view *ReportViewConfig) (*RunReportDTO, error) {
@@ -52,6 +61,7 @@ func (s *RunStore) BuildRunReport(runID string, view *ReportViewConfig) (*RunRep
 		Meta:       meta,
 		Config:     runConfig,
 		Stats:      stats,
+		Summary:    summarizeReportStats(stats),
 		LogSummary: logSummary,
 		Errors:     errors,
 		View:       normalizeReportView(view),
@@ -75,4 +85,28 @@ func normalizeReportView(view *ReportViewConfig) *ReportViewConfig {
 		out.TimeRange = "all"
 	}
 	return out
+}
+
+func summarizeReportStats(stats []StatsDataPoint) *ReportSummary {
+	summary := &ReportSummary{}
+	if len(stats) == 0 {
+		return summary
+	}
+
+	summary.SampleCount = len(stats)
+	summary.DurationSeconds = stats[len(stats)-1].Time - stats[0].Time
+
+	for _, point := range stats {
+		if point.IOPS > summary.PeakIOPS {
+			summary.PeakIOPS = point.IOPS
+		}
+		if point.BW > summary.PeakBandwidthMiB {
+			summary.PeakBandwidthMiB = point.BW
+		}
+		if point.LatMax > summary.PeakLatencyMs {
+			summary.PeakLatencyMs = point.LatMax
+		}
+	}
+
+	return summary
 }

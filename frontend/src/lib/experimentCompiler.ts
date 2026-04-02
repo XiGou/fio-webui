@@ -1,5 +1,6 @@
 import type { FioTaskList, GlobalConfig, JobConfig } from '@/types/api'
-import type { Experiment, ExperimentJob } from '@/types/experiment'
+import type { Experiment, ExperimentJob, FioParameterMap } from '@/types/experiment'
+import { buildJobExtraOptions, resolveEffectiveJobParams, resolveStageSharedParams } from './fioParameters'
 
 export type CompileExperimentResult = {
   taskList: FioTaskList
@@ -23,13 +24,11 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
 export const defaultJob = (): ExperimentJob => ({
   id: `job-${uid()}`,
   name: 'randread-4k',
-  filename: '/tmp/fio-test',
-  rw: 'randread',
-  bs: '4k',
-  size: '1G',
-  numjobs: 1,
-  iodepth: 32,
-  rwmixread: 70,
+  overrides: {
+    rw: 'randread',
+    bs: '4k',
+    rwmixread: 70,
+  },
 })
 
 export const defaultExperiment = (): Experiment => ({
@@ -37,15 +36,74 @@ export const defaultExperiment = (): Experiment => ({
   name: 'AI Harness Experiment',
   description: 'Stage-based fio experiment',
   global: { ...DEFAULT_GLOBAL },
-  stages: [
-    {
-      id: `stage-${uid()}`,
-      name: 'Warmup',
-      mode: 'sequential',
-      jobs: [defaultJob()],
-    },
-  ],
+  stages: [defaultStage()],
 })
+
+export const defaultStage = () => ({
+  id: `stage-${uid()}`,
+  name: 'Warmup',
+  mode: 'sequential' as const,
+  shared: {
+    filename: '/tmp/fio-test',
+    size: '1G',
+    numjobs: 1,
+    iodepth: 32,
+  },
+  jobs: [defaultJob()],
+})
+
+const DEFAULT_JOB_PARAMS: FioParameterMap = {
+  filename: '/tmp/fio-test',
+  rw: 'read',
+  bs: '4k',
+  size: '1G',
+  numjobs: 1,
+  iodepth: 1,
+  rwmixread: 70,
+}
+
+function asString(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value : fallback
+}
+
+function asNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function buildTaskGlobal(shared: FioParameterMap): GlobalConfig {
+  return {
+    ioengine: asString(shared.ioengine, DEFAULT_GLOBAL.ioengine),
+    direct: asBoolean(shared.direct, DEFAULT_GLOBAL.direct),
+    runtime: asNumber(shared.runtime, DEFAULT_GLOBAL.runtime),
+    time_based: asBoolean(shared.time_based, DEFAULT_GLOBAL.time_based ?? true),
+    group_reporting: asBoolean(shared.group_reporting, DEFAULT_GLOBAL.group_reporting ?? true),
+    log_avg_msec: asNumber(shared.log_avg_msec, DEFAULT_GLOBAL.log_avg_msec),
+    status_interval: asNumber(shared.status_interval, DEFAULT_GLOBAL.status_interval ?? 1),
+    output_format: asString(shared.output_format, DEFAULT_GLOBAL.output_format ?? 'json'),
+  }
+}
+
+function buildResolvedJob(name: string, effective: FioParameterMap, overrides: FioParameterMap, idx: number): JobConfig {
+  return {
+    name: name || `job-${idx + 1}`,
+    filename: asString(effective.filename, asString(DEFAULT_JOB_PARAMS.filename, '/tmp/fio-test')),
+    rw: asString(effective.rw, asString(DEFAULT_JOB_PARAMS.rw, 'read')),
+    bs: asString(effective.bs, asString(DEFAULT_JOB_PARAMS.bs, '4k')),
+    size: asString(effective.size, asString(DEFAULT_JOB_PARAMS.size, '1G')),
+    numjobs: asNumber(effective.numjobs, asNumber(DEFAULT_JOB_PARAMS.numjobs, 1)),
+    iodepth: asNumber(effective.iodepth, asNumber(DEFAULT_JOB_PARAMS.iodepth, 1)),
+    rwmixread: asNumber(effective.rwmixread, asNumber(DEFAULT_JOB_PARAMS.rwmixread, 70)),
+    rate: typeof effective.rate === 'string' ? effective.rate : '',
+    runtime: 'runtime' in overrides ? asNumber(overrides.runtime, 0) : undefined,
+    ioengine: typeof overrides.ioengine === 'string' ? overrides.ioengine : undefined,
+    extra_options: buildJobExtraOptions(effective, overrides),
+  }
+}
 
 export function compileExperimentToTaskList(experiment: Experiment): CompileExperimentResult {
   const errors: string[] = []
@@ -63,20 +121,12 @@ export function compileExperimentToTaskList(experiment: Experiment): CompileExpe
       continue
     }
 
-    const global: GlobalConfig = { ...experiment.global, ...(stage.global ?? {}) }
-    const jobs: JobConfig[] = stage.jobs.map((job, idx) => ({
-      name: job.name || `job-${idx + 1}`,
-      filename: job.filename || '/tmp/fio-test',
-      rw: job.rw || 'read',
-      bs: job.bs || '4k',
-      size: job.size || '1G',
-      numjobs: Number(job.numjobs || 1),
-      iodepth: Number(job.iodepth || 1),
-      rwmixread: Number(job.rwmixread ?? 70),
-      rate: job.rate || '',
-      runtime: job.runtime,
-      ioengine: job.ioengine,
-    }))
+    const shared = resolveStageSharedParams(experiment.global, stage.shared)
+    const global = buildTaskGlobal(shared)
+    const jobs: JobConfig[] = stage.jobs.map((job, idx) => {
+      const effective = resolveEffectiveJobParams(experiment.global, stage.shared, job.overrides)
+      return buildResolvedJob(job.name, effective, job.overrides, idx)
+    })
 
     if (stage.mode === 'sequential') {
       for (let i = 0; i < jobs.length; i++) {

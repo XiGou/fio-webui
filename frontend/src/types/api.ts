@@ -1,3 +1,5 @@
+export type FioOptionValue = string | number | boolean
+
 export interface OptionsResponse {
   io_engines: string[]
   rw_types: string[]
@@ -29,6 +31,7 @@ export interface JobConfig {
   runtime?: number // Override global runtime for this job
   ioengine?: string // Override global ioengine for this job
   nodeId?: string // Source workflow node id for traceability
+  extra_options?: Record<string, FioOptionValue>
 }
 
 export interface FioConfig {
@@ -151,9 +154,9 @@ export interface StatsDataPoint {
   iops: number
   iopsRead: number
   iopsWrite: number
-  bw: number // MB/s
-  bwRead: number // MB/s
-  bwWrite: number // MB/s
+  bw: number // MiB/s
+  bwRead: number // MiB/s
+  bwWrite: number // MiB/s
   latMean: number // ms
   latP95: number // ms
   latP99: number // ms

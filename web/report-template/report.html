@@ -5,141 +5,431 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FIO Run Report</title>
   <style>
-    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
-    .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
-    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-    .grid { display: grid; gap: 12px; }
-    .grid-4 { grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); }
-    .muted { color: #6b7280; font-size: 12px; }
-    .error { color: #b91c1c; }
-    pre { margin: 0; background: #111827; color: #e5e7eb; padding: 12px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
-    .toolbar { display:flex; gap:8px; margin-bottom: 10px; }
-    button, select { border:1px solid #d1d5db; background:white; border-radius:8px; padding:6px 10px; cursor:pointer; }
-    button.active { background:#111827; color:white; border-color:#111827; }
-    canvas { width: 100%; height: 320px; border: 1px solid #e5e7eb; border-radius: 8px; }
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
+      --bg: #f3f5f9;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #5d6b85;
+      --line: #d8deea;
+      --accent: #2553d6;
+      --accent-soft: rgba(37, 83, 214, 0.1);
+      --success: #0f8a4b;
+      --danger: #b42318;
+      --shadow: 0 18px 48px rgba(23, 32, 51, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: linear-gradient(180deg, #eef2f8 0%, #f8fafc 100%); color: var(--text); }
+    .shell { max-width: 1240px; margin: 0 auto; padding: 28px 20px 48px; }
+    .hero { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr); align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); }
+    .hero-main { padding: 28px; }
+    .hero-meta { padding: 24px; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+    h1 { margin: 14px 0 8px; font-size: clamp(30px, 4vw, 44px); line-height: 1.05; }
+    .subtitle { margin: 0; max-width: 58ch; color: var(--muted); line-height: 1.65; font-size: 14px; }
+    .meta-grid { display: grid; gap: 12px; }
+    .meta-item { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+    .meta-item:last-child { border-bottom: 0; padding-bottom: 0; }
+    .meta-label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .meta-value { font-size: 14px; word-break: break-word; }
+    .cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 22px; }
+    .stat { padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: linear-gradient(180deg, #fff 0%, #f8fafc 100%); }
+    .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .stat-value { font-size: 24px; font-weight: 700; line-height: 1.1; }
+    .stat-note { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .section { margin-top: 18px; padding: 22px; }
+    .section-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .section h2 { margin: 0; font-size: 18px; }
+    .section p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    button, select {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font: inherit;
+      cursor: pointer;
+      color: var(--text);
+    }
+    button.active { background: var(--text); border-color: var(--text); color: #fff; }
+    .metric-strip { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 16px; }
+    .metric-card { padding: 16px; border-radius: 16px; background: #f8fafc; border: 1px solid var(--line); }
+    .metric-card span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .metric-card strong { font-size: 22px; }
+    .chart-wrap { border-radius: 20px; background: #fbfcfe; border: 1px solid var(--line); padding: 14px; }
+    .chart-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+    canvas { width: 100%; height: auto; border-radius: 12px; background: #fff; }
+    .grid-2 { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .subpanel { padding: 18px; border-radius: 18px; background: #fbfcfe; border: 1px solid var(--line); }
+    .subpanel h3 { margin: 0 0 12px; font-size: 15px; }
+    pre { margin: 0; padding: 14px; background: #101725; color: #e6edf8; border-radius: 14px; white-space: pre-wrap; word-break: break-word; overflow: auto; max-height: 420px; font-size: 12px; line-height: 1.65; }
+    .error-list { margin: 0; padding-left: 18px; color: var(--danger); line-height: 1.7; }
+    .empty { color: var(--muted); font-size: 13px; }
+    .status-finished { color: var(--success); }
+    .status-error { color: var(--danger); }
+    .status-running { color: var(--accent); }
+
+    @media (max-width: 960px) {
+      .hero, .grid-2 { grid-template-columns: 1fr; }
+      .hero-main, .hero-meta, .section { padding: 20px; }
+    }
   </style>
 </head>
 <body>
-<div class="container">
-  <h1>FIO 报告</h1>
-  <p class="muted" id="meta-line"></p>
+  <div class="shell">
+    <section class="hero">
+      <div class="panel hero-main">
+        <div class="eyebrow">FIO Run Report</div>
+        <h1 id="title-line">运行报告</h1>
+        <p class="subtitle">该导出页会保留运行元数据、性能摘要、按时间范围切换的单位自适应图表，以及配置与错误上下文，便于离线共享和复盘。</p>
+        <div class="cards" id="overview"></div>
+      </div>
+      <aside class="panel hero-meta">
+        <div class="meta-grid" id="meta"></div>
+      </aside>
+    </section>
 
-  <div class="card">
-    <h3>概览卡片</h3>
-    <div class="grid grid-4" id="overview"></div>
+    <section class="panel section">
+      <div class="section-head">
+        <div>
+          <h2>性能走势</h2>
+          <p>统一使用 tail-relative 时间范围和自适应单位，避免不同页面口径不一致。</p>
+        </div>
+        <div class="toolbar">
+          <button data-metric="iops">IOPS</button>
+          <button data-metric="bw">带宽</button>
+          <button data-metric="lat">延迟</button>
+          <select id="timeRange">
+            <option value="all">全部</option>
+            <option value="15m">最后 15 分钟</option>
+            <option value="1h">最后 1 小时</option>
+            <option value="6h">最后 6 小时</option>
+            <option value="24h">最后 24 小时</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="metric-strip" id="metric-strip"></div>
+
+      <div class="chart-wrap">
+        <div class="chart-meta">
+          <span id="chart-unit"></span>
+          <span id="chart-points"></span>
+        </div>
+        <canvas id="chart" width="1120" height="400"></canvas>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>运行配置</h2>
+            <p>保留完整 task list / workflow 配置，便于复现实验。</p>
+          </div>
+        </div>
+        <pre id="config"></pre>
+      </div>
+
+      <div class="panel section">
+        <div class="section-head">
+          <div>
+            <h2>日志与错误</h2>
+            <p>汇总最终日志摘要与运行时错误，便于快速定位异常。</p>
+          </div>
+        </div>
+        <div class="subpanel" style="margin-bottom: 14px;">
+          <h3>错误列表</h3>
+          <ul class="error-list" id="errors"></ul>
+        </div>
+        <div class="subpanel">
+          <h3>日志摘要</h3>
+          <pre id="logSummary"></pre>
+        </div>
+      </div>
+    </section>
   </div>
 
-  <div class="card">
-    <h3>性能图表</h3>
-    <div class="toolbar">
-      <button data-metric="iops">IOPS</button>
-      <button data-metric="bw">BW</button>
-      <button data-metric="lat">Latency</button>
-      <select id="timeRange">
-        <option value="all">全部</option>
-        <option value="15m">15分钟</option>
-        <option value="1h">1小时</option>
-        <option value="6h">6小时</option>
-        <option value="24h">24小时</option>
-      </select>
-    </div>
-    <canvas id="chart" width="1000" height="320"></canvas>
-  </div>
+  <script>
+    const report = JSON.parse("__REPORT_DATA__");
+    let metric = (report.view && report.view.metric) || 'iops';
+    let timeRange = (report.view && report.view.time_range) || 'all';
 
-  <div class="card">
-    <h3>配置与工作流视图</h3>
-    <pre id="config"></pre>
-  </div>
+    const formatTime = (sec) => {
+      const total = Math.max(0, Math.floor(sec));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    };
 
-  <div class="card">
-    <h3>错误与告警区</h3>
-    <ul id="errors"></ul>
-    <h4>日志摘要</h4>
-    <pre id="logSummary"></pre>
-  </div>
-</div>
-<script>
-  const report = JSON.parse("__REPORT_DATA__");
-  let metric = (report.view && report.view.metric) || 'iops';
-  let timeRange = (report.view && report.view.time_range) || 'all';
+    const compact = (value) => {
+      const abs = Math.abs(value);
+      if (abs >= 100) return value.toFixed(0);
+      if (abs >= 10) return value.toFixed(1);
+      return value.toFixed(2).replace(/\.?0+$/, '');
+    };
 
-  const byRange = (items) => {
-    if (timeRange === 'all' || !items.length) return items;
-    const now = items[items.length - 1].time;
-    const ranges = { '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 };
-    const sec = ranges[timeRange] || 0;
-    if (!sec) return items;
-    return items.filter((p) => (now - p.time) <= sec);
-  };
+    const filterByRange = (items) => {
+      if (timeRange === 'all' || !items.length) return items;
+      const tail = items[items.length - 1].time;
+      const ranges = { '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 };
+      const threshold = tail - (ranges[timeRange] || 0);
+      return items.filter((item) => item.time >= threshold);
+    };
 
-  function renderOverview() {
-    const sum = (report.meta && report.meta.summary) || {};
-    const cards = [
-      ['Run ID', report.meta?.id || '-'],
-      ['状态', report.meta?.status || '-'],
-      ['IOPS', Number(sum.iops || 0).toFixed(0)],
-      ['BW(MB/s)', Number(sum.bw || 0).toFixed(2)],
-      ['延迟均值(ms)', Number(sum.lat_mean || 0).toFixed(2)],
-      ['采样点', String((report.stats || []).length)],
-    ];
-    document.getElementById('overview').innerHTML = cards.map(([k,v]) => `<div><div class="muted">${k}</div><div>${v}</div></div>`).join('');
-    document.getElementById('meta-line').textContent = `导出时间 ${report.exported_at}，开始 ${report.meta?.start_time || '-'}`;
-  }
+    const describeMetric = (metricKey, items) => {
+      const values = items.map((item) => {
+        if (metricKey === 'bw') return item.bw || 0;
+        if (metricKey === 'lat') return item.latMean || 0;
+        return item.iops || 0;
+      });
+      const max = values.reduce((peak, value) => Math.max(peak, value), 0);
 
-  function pointValue(p) {
-    if (metric === 'bw') return p.bw;
-    if (metric === 'lat') return p.latMean;
-    return p.iops;
-  }
+      if (metricKey === 'bw') {
+        if (max >= 1024) {
+          return {
+            label: '带宽',
+            unit: 'GiB/s',
+            transform: (value) => value / 1024,
+            getValue: (item) => item.bw || 0,
+          };
+        }
+        return {
+          label: '带宽',
+          unit: 'MiB/s',
+          transform: (value) => value,
+          getValue: (item) => item.bw || 0,
+        };
+      }
 
-  function renderChart() {
-    const canvas = document.getElementById('chart');
-    const ctx = canvas.getContext('2d');
-    const data = byRange(report.stats || []);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (!data.length) return;
-    const vals = data.map(pointValue);
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
-    const pad = 24;
-    ctx.strokeStyle = '#2563eb';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    data.forEach((p, i) => {
-      const x = pad + (i * (canvas.width - pad * 2)) / Math.max(1, data.length - 1);
-      const y = canvas.height - pad - ((pointValue(p) - min) / Math.max(1e-9, (max - min))) * (canvas.height - pad * 2);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      if (metricKey === 'lat') {
+        if (max >= 1000) {
+          return {
+            label: '延迟',
+            unit: 's',
+            transform: (value) => value / 1000,
+            getValue: (item) => item.latMean || 0,
+          };
+        }
+        if (max > 0 && max < 1) {
+          return {
+            label: '延迟',
+            unit: 'us',
+            transform: (value) => value * 1000,
+            getValue: (item) => item.latMean || 0,
+          };
+        }
+        return {
+          label: '延迟',
+          unit: 'ms',
+          transform: (value) => value,
+          getValue: (item) => item.latMean || 0,
+        };
+      }
+
+      if (max >= 1000000) {
+        return {
+          label: 'IOPS',
+          unit: 'MIOPS',
+          transform: (value) => value / 1000000,
+          getValue: (item) => item.iops || 0,
+        };
+      }
+      if (max >= 1000) {
+        return {
+          label: 'IOPS',
+          unit: 'KIOPS',
+          transform: (value) => value / 1000,
+          getValue: (item) => item.iops || 0,
+        };
+      }
+      return {
+        label: 'IOPS',
+        unit: 'IOPS',
+        transform: (value) => value,
+        getValue: (item) => item.iops || 0,
+      };
+    };
+
+    const formatMetricValue = (descriptor, rawValue) => `${compact(descriptor.transform(rawValue))} ${descriptor.unit}`;
+
+    function renderMeta() {
+      document.getElementById('title-line').textContent = `运行报告 · ${(report.meta && report.meta.id) || 'unknown'}`;
+      const meta = [
+        ['Run ID', report.meta && report.meta.id || '-'],
+        ['状态', report.meta && report.meta.status || '-'],
+        ['开始时间', report.meta && report.meta.start_time || '-'],
+        ['结束时间', report.meta && report.meta.end_time || '-'],
+        ['导出时间', report.exported_at || '-'],
+        ['报告视图', `${metric.toUpperCase()} / ${timeRange}`],
+      ];
+      document.getElementById('meta').innerHTML = meta.map(([label, value]) => `
+        <div class="meta-item">
+          <span class="meta-label">${label}</span>
+          <div class="meta-value">${value}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderOverview() {
+      const summary = report.summary || {};
+      const metaSummary = report.meta && report.meta.summary || {};
+      const cards = [
+        ['采样点', String(summary.sample_count || 0), 'stats.jsonl 中可用点位'],
+        ['持续时间', formatTime(summary.duration_seconds || 0), '基于首尾采样点计算'],
+        ['峰值 IOPS', compact(summary.peak_iops || 0), metaSummary.iops ? `最终摘要 ${compact(metaSummary.iops)}` : '取历史峰值'],
+        ['峰值带宽', summary.peak_bandwidth_mib >= 1024 ? `${compact((summary.peak_bandwidth_mib || 0) / 1024)} GiB/s` : `${compact(summary.peak_bandwidth_mib || 0)} MiB/s`, metaSummary.bw ? `最终摘要 ${compact(metaSummary.bw)} MiB/s` : '取历史峰值'],
+        ['峰值延迟', (summary.peak_latency_ms || 0) >= 1000 ? `${compact((summary.peak_latency_ms || 0) / 1000)} s` : (summary.peak_latency_ms || 0) < 1 && (summary.peak_latency_ms || 0) > 0 ? `${compact((summary.peak_latency_ms || 0) * 1000)} us` : `${compact(summary.peak_latency_ms || 0)} ms`, metaSummary.lat_mean ? `最终均值 ${compact(metaSummary.lat_mean)} ms` : '取历史峰值'],
+        ['错误数量', String((report.errors || []).length), (report.errors || []).length ? '请结合日志摘要查看' : '本次导出未发现错误'],
+      ];
+      document.getElementById('overview').innerHTML = cards.map(([label, value, note]) => `
+        <div class="stat">
+          <div class="stat-label">${label}</div>
+          <div class="stat-value">${value}</div>
+          <div class="stat-note">${note}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderMetricStrip(filtered, descriptor) {
+      const values = filtered.map((item) => descriptor.getValue(item));
+      const current = values[values.length - 1] || 0;
+      const peak = values.reduce((acc, value) => Math.max(acc, value), 0);
+      const mean = values.length ? values.reduce((acc, value) => acc + value, 0) / values.length : 0;
+      document.getElementById('metric-strip').innerHTML = [
+        ['当前值', formatMetricValue(descriptor, current)],
+        ['峰值', formatMetricValue(descriptor, peak)],
+        ['均值', formatMetricValue(descriptor, mean)],
+      ].map(([label, value]) => `
+        <div class="metric-card">
+          <span>${label}</span>
+          <strong>${value}</strong>
+        </div>
+      `).join('');
+    }
+
+    function drawChart(filtered, descriptor) {
+      const canvas = document.getElementById('chart');
+      const ctx = canvas.getContext('2d');
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+
+      document.getElementById('chart-unit').textContent = `${descriptor.label} · ${descriptor.unit}`;
+      document.getElementById('chart-points').textContent = `${filtered.length} points`;
+
+      if (!filtered.length) {
+        ctx.fillStyle = '#5d6b85';
+        ctx.font = '14px sans-serif';
+        ctx.fillText('当前时间范围内暂无数据', 42, 48);
+        return;
+      }
+
+      const pad = { top: 20, right: 20, bottom: 48, left: 76 };
+      const innerWidth = width - pad.left - pad.right;
+      const innerHeight = height - pad.top - pad.bottom;
+      const startTime = filtered[0].time;
+      const endTime = filtered[filtered.length - 1].time;
+      const duration = Math.max(1, endTime - startTime);
+      const values = filtered.map((item) => descriptor.transform(descriptor.getValue(item)));
+      const max = values.reduce((peak, value) => Math.max(peak, value), 0);
+      const upper = max <= 0 ? 1 : max * 1.12;
+
+      ctx.strokeStyle = '#d8deea';
+      ctx.fillStyle = '#5d6b85';
+      ctx.lineWidth = 1;
+      ctx.font = '12px sans-serif';
+
+      for (let i = 0; i <= 4; i += 1) {
+        const y = pad.top + (innerHeight * i) / 4;
+        const value = upper - (upper * i) / 4;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(width - pad.right, y);
+        ctx.stroke();
+        ctx.fillText(compact(value), 12, y + 4);
+      }
+
+      for (let i = 0; i <= 4; i += 1) {
+        const x = pad.left + (innerWidth * i) / 4;
+        const elapsed = (duration * i) / 4;
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, height - pad.bottom);
+        ctx.stroke();
+        ctx.fillText(formatTime(elapsed), x - 14, height - 18);
+      }
+
+      const gradient = ctx.createLinearGradient(0, pad.top, 0, height - pad.bottom);
+      gradient.addColorStop(0, 'rgba(37, 83, 214, 0.22)');
+      gradient.addColorStop(1, 'rgba(37, 83, 214, 0.02)');
+
+      ctx.beginPath();
+      filtered.forEach((item, index) => {
+        const x = pad.left + ((item.time - startTime) / duration) * innerWidth;
+        const y = pad.top + innerHeight - (descriptor.transform(descriptor.getValue(item)) / upper) * innerHeight;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#2553d6';
+      ctx.stroke();
+
+      ctx.lineTo(width - pad.right, height - pad.bottom);
+      ctx.lineTo(pad.left, height - pad.bottom);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+    }
+
+    function renderConfig() {
+      document.getElementById('config').textContent = JSON.stringify(report.config || {}, null, 2);
+    }
+
+    function renderErrors() {
+      const errors = report.errors || [];
+      document.getElementById('errors').innerHTML = errors.length
+        ? errors.map((error) => `<li>${error}</li>`).join('')
+        : '<li class="empty">无</li>';
+      document.getElementById('logSummary').textContent = report.log_summary && report.log_summary.summary
+        ? report.log_summary.summary
+        : '无日志摘要';
+    }
+
+    function renderMetricView() {
+      const filtered = filterByRange(report.stats || []);
+      const descriptor = describeMetric(metric, filtered);
+      renderMetricStrip(filtered, descriptor);
+      drawChart(filtered, descriptor);
+    }
+
+    document.querySelectorAll('[data-metric]').forEach((button) => {
+      button.addEventListener('click', () => {
+        metric = button.getAttribute('data-metric');
+        document.querySelectorAll('[data-metric]').forEach((item) => item.classList.toggle('active', item === button));
+        renderMetricView();
+      });
+      button.classList.toggle('active', button.getAttribute('data-metric') === metric);
     });
-    ctx.stroke();
-  }
 
-  function renderConfig() {
-    document.getElementById('config').textContent = JSON.stringify(report.config || {}, null, 2);
-  }
-
-  function renderErrors() {
-    const errors = report.errors || [];
-    document.getElementById('errors').innerHTML = errors.length ? errors.map((e) => `<li class="error">${e}</li>`).join('') : '<li>无</li>';
-    document.getElementById('logSummary').textContent = report.log_summary?.summary || '无';
-  }
-
-  document.querySelectorAll('[data-metric]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      metric = btn.getAttribute('data-metric');
-      document.querySelectorAll('[data-metric]').forEach((b) => b.classList.toggle('active', b === btn));
-      renderChart();
+    const rangeEl = document.getElementById('timeRange');
+    rangeEl.value = timeRange;
+    rangeEl.addEventListener('change', () => {
+      timeRange = rangeEl.value;
+      renderMetricView();
     });
-    btn.classList.toggle('active', btn.getAttribute('data-metric') === metric);
-  });
 
-  const rangeEl = document.getElementById('timeRange');
-  rangeEl.value = timeRange;
-  rangeEl.addEventListener('change', () => { timeRange = rangeEl.value; renderChart(); });
-
-  renderOverview();
-  renderChart();
-  renderConfig();
-  renderErrors();
-</script>
+    renderMeta();
+    renderOverview();
+    renderMetricView();
+    renderConfig();
+    renderErrors();
+  </script>
 </body>
 </html>
