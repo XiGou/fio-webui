@@ -16,4 +16,4 @@ export type HistoryFilterState = {
   templateSource: string
 }
 
-export type HistoryAction = 'rerun' | 'restore-workflow' | 'duplicate' | 'save-template' | 'export-report' | 'delete'
+export type HistoryAction = 'rerun' | 'restore-workflow' | 'duplicate' | 'save-template' | 'export-report' | 'open-monitor' | 'delete'

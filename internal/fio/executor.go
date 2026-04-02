@@ -107,6 +107,28 @@ func (e *Executor) GetCurrentRunID() string {
 	return e.state.ID
 }
 
+func (e *Executor) saveInitialMeta(runID string, startTime time.Time, metadata *RunMetadata) {
+	if e.RunStore == nil {
+		return
+	}
+
+	meta := &RunMeta{
+		ID:        runID,
+		Status:    string(StatusRunning),
+		StartTime: startTime.Format(time.RFC3339),
+		DiskBytes: 0,
+	}
+	if metadata != nil {
+		meta.WorkflowID = metadata.WorkflowID
+		meta.WorkflowVersion = metadata.WorkflowVersion
+		meta.CompiledAt = metadata.CompiledAt
+	}
+
+	if err := e.RunStore.SaveMeta(runID, meta); err != nil && Debug {
+		log.Printf("[DEBUG] SaveMeta(initial): %v", err)
+	}
+}
+
 func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	e.mu.Lock()
 	if e.state != nil && e.state.Status == StatusRunning {
@@ -190,11 +212,13 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 		}
 	}
 
+	startTime := time.Now()
 	e.state = &RunState{
 		ID:        runID,
 		Status:    StatusRunning,
-		StartTime: time.Now(),
+		StartTime: startTime,
 	}
+	e.saveInitialMeta(runID, startTime, nil)
 
 	e.outputCh = make(chan string, 100)
 	if e.statusCh == nil {
@@ -250,11 +274,13 @@ func (e *Executor) RunTasks(tasks []FioTask, metadata *RunMetadata) (*RunState, 
 		os.MkdirAll(runDir, 0755)
 	}
 
+	startTime := time.Now()
 	e.state = &RunState{
 		ID:        runID,
 		Status:    StatusRunning,
-		StartTime: time.Now(),
+		StartTime: startTime,
 	}
+	e.saveInitialMeta(runID, startTime, metadata)
 
 	e.outputCh = make(chan string, 100)
 	if e.statusCh == nil {

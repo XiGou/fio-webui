@@ -193,12 +193,13 @@ export function HistoryPage() {
   }, [fetchRuns, selectedRunId])
 
   const onAction = useCallback((action: HistoryAction) => {
+    if (action === 'open-monitor' && detail) navigate(`/monitor?runId=${detail.meta.id}`)
     if (action === 'restore-workflow') restoreToWorkflow()
     if (action === 'duplicate' || action === 'rerun') duplicateToLegacy()
     if (action === 'save-template') saveAsTemplate()
     if (action === 'export-report') exportReport()
     if (action === 'delete' && detail) deleteRuns([detail.meta.id])
-  }, [deleteRuns, detail, duplicateToLegacy, exportReport, restoreToWorkflow, saveAsTemplate])
+  }, [deleteRuns, detail, duplicateToLegacy, exportReport, navigate, restoreToWorkflow, saveAsTemplate])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -253,6 +254,7 @@ export function HistoryPage() {
             allTemplateSources={allTemplateSources}
             onFilterChange={(patch) => setFilters((prev) => ({ ...prev, ...patch }))}
             onSelectRun={openDetail}
+            onOpenMonitor={(id) => navigate(`/monitor?runId=${id}`)}
             onToggleSelect={(id, checked) => setSelectedRunIds((prev) => checked ? Array.from(new Set([...prev, id])) : prev.filter((x) => x !== id))}
             onToggleSelectAll={(checked) => setSelectedRunIds(checked ? filteredRuns.map((r) => r.id) : [])}
             onBatchDelete={() => deleteRuns(selectedRunIds)}

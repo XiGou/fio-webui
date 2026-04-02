@@ -1,4 +1,4 @@
-import { Copy, FilePlus2, Play, Save, Trash2 } from 'lucide-react'
+import { Activity, Copy, FilePlus2, Play, Save, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -48,6 +48,7 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detail
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">RunDetailPanel</CardTitle>
           <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" onClick={() => onAction('open-monitor')} disabled={!detail}><Activity className="h-4 w-4 mr-1" />打开监控</Button>
             <Button size="sm" variant="outline" onClick={() => onAction('restore-workflow')} disabled={!hasConfig(detail?.config ?? null)}><Play className="h-4 w-4 mr-1" />恢复到画布</Button>
             <Button size="sm" variant="outline" onClick={() => onAction('duplicate')} disabled={!hasConfig(detail?.config ?? null)}><Copy className="h-4 w-4 mr-1" />复制配置</Button>
             <Button size="sm" variant="outline" onClick={() => onAction('save-template')} disabled={!hasConfig(detail?.config ?? null)}><Save className="h-4 w-4 mr-1" />另存模板</Button>

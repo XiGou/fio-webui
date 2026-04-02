@@ -16,6 +16,7 @@ type RunsListPanelProps = {
   allTemplateSources: string[]
   onFilterChange: (patch: Partial<HistoryFilterState>) => void
   onSelectRun: (id: string) => void
+  onOpenMonitor: (id: string) => void
   onToggleSelect: (id: string, checked: boolean) => void
   onToggleSelectAll: (checked: boolean) => void
   onBatchDelete: () => void
@@ -34,6 +35,7 @@ export function RunsListPanel({
   allTemplateSources,
   onFilterChange,
   onSelectRun,
+  onOpenMonitor,
   onToggleSelect,
   onToggleSelectAll,
   onBatchDelete,
@@ -116,6 +118,17 @@ export function RunsListPanel({
                   <div className="text-xs text-muted-foreground mt-0.5">{formatTime(r.start_time)} · {formatBytes(r.disk_bytes)}</div>
                   <div className="text-xs text-muted-foreground mt-1">标签: {r.tags?.join(', ') || '未标记'} · 来源: {r.template_source || 'manual'}</div>
                 </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onOpenMonitor(r.id)
+                  }}
+                >
+                  监控
+                </Button>
               </div>
             </div>
           ))}

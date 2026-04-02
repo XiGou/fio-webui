@@ -31,6 +31,7 @@ export function WorkflowStudioPage() {
   const [runError, setRunError] = useState('')
   const [running, setRunning] = useState(false)
   const [activeRun, setActiveRun] = useState<RunState | null>(null)
+  const [lastStartedRunId, setLastStartedRunId] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -88,8 +89,8 @@ export function WorkflowStudioPage() {
     try {
       const currentRun = await syncActiveRun()
       if (currentRun?.id) {
-        setRunError('已有运行中的任务，正在跳转到监控页。')
-        openActiveRun(currentRun.id)
+        setLastStartedRunId(currentRun.id)
+        setRunError('已有运行中的任务，请使用下面的按钮打开监控页。')
         return
       }
 
@@ -103,8 +104,8 @@ export function WorkflowStudioPage() {
         if (res.status === 409) {
           const currentRunAfterConflict = await syncActiveRun()
           if (currentRunAfterConflict?.id) {
-            setRunError('已有运行中的任务，正在跳转到监控页。')
-            openActiveRun(currentRunAfterConflict.id)
+            setLastStartedRunId(currentRunAfterConflict.id)
+            setRunError('已有运行中的任务，请使用下面的按钮打开监控页。')
             return
           }
         }
@@ -112,7 +113,9 @@ export function WorkflowStudioPage() {
         return
       }
       const state = (await res.json()) as RunState
-      if (state.id) navigate(`/monitor?runId=${state.id}`)
+      if (state.id) {
+        setLastStartedRunId(state.id)
+      }
     } catch {
       setRunError('网络错误，启动失败')
     } finally {
@@ -137,6 +140,9 @@ export function WorkflowStudioPage() {
             <Button onClick={addStage} variant="outline">+ Stage</Button>
             <Button onClick={run} disabled={!canRun || running}>
               {running ? '运行中…' : activeRun?.status === 'running' ? '已有任务运行中' : '编译并执行'}
+            </Button>
+            <Button variant="secondary" onClick={() => openActiveRun(activeRun?.id || lastStartedRunId)} disabled={!activeRun?.id && !lastStartedRunId}>
+              打开实时监控
             </Button>
           </div>
           {runError ? <p className="text-sm text-red-600">{runError}</p> : null}
