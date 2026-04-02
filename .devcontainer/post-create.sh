@@ -8,6 +8,19 @@ export NPM_REGISTRY="${FIO_WEBUI_NPM_REGISTRY:-${NPM_CONFIG_REGISTRY:-https://re
 export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 export PATH="${NPM_CONFIG_PREFIX}/bin:${PATH}"
 
+echo "[devcontainer] Verifying node/npm installation..."
+if ! command -v npm >/dev/null 2>&1; then
+  echo "[devcontainer][ERROR] npm not found in PATH: $PATH"
+  echo "[devcontainer][ERROR] node path: $(command -v node || true)"
+  echo "[devcontainer][ERROR] Please check .devcontainer/Dockerfile and devcontainer feature node:1 installation."
+  exit 1
+fi
+
+cat <<EOF
+[devcontainer] node version: $(node --version 2>/dev/null || echo "n/a")
+[devcontainer] npm version: $(npm --version 2>/dev/null || echo "n/a")
+EOF
+
 # Keep global npm installs writable for the non-root vscode user.
 mkdir -p "${NPM_CONFIG_PREFIX}"
 
