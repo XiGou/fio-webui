@@ -165,3 +165,26 @@ func StatusToStatsDataPoint(status *StatusUpdate) *StatsDataPoint {
 		LatMax:    latMax,
 	}
 }
+
+// FilterStatsPoints filters points by [from,to] unix-second range and optional limit.
+// A zero from/to means unbounded on that side. limit<=0 means no limit.
+// When limit is set and exceeded, it keeps the newest N points.
+func FilterStatsPoints(points []StatsDataPoint, from, to int64, limit int) []StatsDataPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	filtered := make([]StatsDataPoint, 0, len(points))
+	for _, p := range points {
+		if from > 0 && p.Time < from {
+			continue
+		}
+		if to > 0 && p.Time > to {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+	}
+	return filtered
+}

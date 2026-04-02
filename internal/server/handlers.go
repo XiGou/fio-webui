@@ -239,6 +239,11 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			q := r.URL.Query()
+			from, _ := strconv.ParseInt(q.Get("from"), 10, 64)
+			to, _ := strconv.ParseInt(q.Get("to"), 10, 64)
+			limit, _ := strconv.Atoi(q.Get("limit"))
+			points = fio.FilterStatsPoints(points, from, to, limit)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(points)
 			return
