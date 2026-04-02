@@ -55,7 +55,7 @@ function newJobDraft(base?: Partial<JobConfig>): JobDraft {
     _id: `job_${now}_${rand}`,
     _collapsed: false,
     name: base?.name ?? 'job1',
-    filename: base?.filename ?? '/tmp/fio-test',
+    filename: base?.filename ?? './tmp/fio-test',
     rw: base?.rw ?? 'randread',
     bs: base?.bs ?? '4k',
     size: base?.size ?? '1G',

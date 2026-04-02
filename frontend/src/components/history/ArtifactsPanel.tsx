@@ -7,11 +7,12 @@ import type { RunDetail } from './types'
 type ArtifactsPanelProps = {
   detail: RunDetail | null
   logSummary: LogSummary | null
+  detailError: string
   onFetchLogSummary: () => void
   onExportReport: () => void
 }
 
-export function ArtifactsPanel({ detail, logSummary, onFetchLogSummary, onExportReport }: ArtifactsPanelProps) {
+export function ArtifactsPanel({ detail, logSummary, detailError, onFetchLogSummary, onExportReport }: ArtifactsPanelProps) {
   return (
     <Card className="h-full">
       <CardHeader className="pb-3">
@@ -20,6 +21,7 @@ export function ArtifactsPanel({ detail, logSummary, onFetchLogSummary, onExport
       <CardContent className="space-y-3 text-sm max-h-[72vh] overflow-auto">
         {!detail ? <p className="text-muted-foreground">选择一个运行后查看报告、日志与原始数据。</p> : (
           <>
+            {detailError ? <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{detailError}</p> : null}
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={onExportReport}><FileText className="h-4 w-4 mr-1" />导出报告</Button>
               <Button size="sm" variant="outline" onClick={onFetchLogSummary}><ScrollText className="h-4 w-4 mr-1" />加载日志摘要</Button>
@@ -29,6 +31,7 @@ export function ArtifactsPanel({ detail, logSummary, onFetchLogSummary, onExport
                 <p className="text-xs font-medium mb-2">日志摘要</p>
                 {logSummary.summary ? <pre className="text-xs bg-muted/50 p-2 rounded overflow-auto whitespace-pre-wrap max-h-40">{logSummary.summary}</pre> : <p className="text-xs text-muted-foreground">暂无摘要</p>}
                 {logSummary.errors?.length ? <pre className="text-xs bg-destructive/10 p-2 rounded overflow-auto whitespace-pre-wrap text-destructive mt-2 max-h-40">{logSummary.errors.join('\n')}</pre> : null}
+                {!logSummary.summary && !logSummary.errors?.length ? <p className="mt-2 text-xs text-muted-foreground">这次运行没有保存到可解析的 stdout/stderr 日志。</p> : null}
               </div>
             )}
             <div className="rounded border border-border p-3">

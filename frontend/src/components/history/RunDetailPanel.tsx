@@ -12,6 +12,7 @@ type RunDetailPanelProps = {
   statsData: StatsDataPoint[]
   statsTab: 'iops' | 'bw' | 'lat'
   statsRange: 'all' | '15m' | '1h' | '6h' | '24h'
+  detailError: string
   onStatsTabChange: (tab: 'iops' | 'bw' | 'lat') => void
   onStatsRangeChange: (range: 'all' | '15m' | '1h' | '6h' | '24h') => void
   onAction: (action: HistoryAction) => void
@@ -23,7 +24,7 @@ function hasConfig(config: FioTaskList | null): boolean {
   return Boolean(config?.tasks?.length)
 }
 
-export function RunDetailPanel({ detail, statsData, statsTab, statsRange, onStatsTabChange, onStatsRangeChange, onAction, statusColor, formatBytes }: RunDetailPanelProps) {
+export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detailError, onStatsTabChange, onStatsRangeChange, onAction, statusColor, formatBytes }: RunDetailPanelProps) {
   const [compareMode, setCompareMode] = useState(false)
   const [zoomWindow, setZoomWindow] = useState({ start: 0, end: 100 })
   const [xDomain, setXDomain] = useState<{ min: number; max: number } | null>(null)
@@ -56,6 +57,7 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, onStat
         </div>
       </CardHeader>
       <CardContent className="space-y-3 max-h-[72vh] overflow-auto">
+        {detailError ? <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{detailError}</p> : null}
         {!detail ? <p className="text-sm text-muted-foreground">请选择左侧运行记录查看详情。</p> : (
           <>
             <details open className="rounded border border-border p-2 text-xs">
@@ -63,8 +65,11 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, onStat
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <div>ID: <code>{detail.meta.id}</code></div>
                 <div>状态: <span className={statusColor(detail.meta.status)}>{detail.meta.status}</span></div>
+                <div>开始: {detail.meta.start_time || '-'}</div>
+                <div>结束: {detail.meta.end_time || '-'}</div>
                 <div>占用: {formatBytes(detail.meta.disk_bytes)}</div>
                 <div>来源: {detail.meta.template_source || 'manual'}</div>
+                <div className="col-span-2">错误: {detail.meta.error || '未记录到错误信息'}</div>
               </div>
             </details>
             {detail.meta.summary && (

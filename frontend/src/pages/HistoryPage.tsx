@@ -52,6 +52,7 @@ export function HistoryPage() {
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([])
   const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
   const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
+  const [detailError, setDetailError] = useState('')
   const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
   const [statsRange, setStatsRange] = useState<'all' | '15m' | '1h' | '6h' | '24h'>('all')
   const [filters, setFilters] = useState<HistoryFilterState>({ search: '', status: 'all', timeRange: 'all', tag: 'all', templateSource: 'all' })
@@ -84,9 +85,14 @@ export function HistoryPage() {
     setSelectedRunId(id)
     setLogSummary(null)
     setStatsData([])
+    setDetailError('')
     try {
       const [detailRes, statsRes] = await Promise.all([fetch(`/api/runs/${id}`), fetch(`/api/runs/${id}/stats`)])
-      if (!detailRes.ok) return
+      if (!detailRes.ok) {
+        setDetail(null)
+        setDetailError(`加载运行详情失败：${detailRes.status} ${detailRes.statusText || 'Request failed'}`)
+        return
+      }
       const data = (await detailRes.json()) as RunDetail
       setDetail(data)
       if (statsRes.ok) {
@@ -94,9 +100,12 @@ export function HistoryPage() {
         if (Array.isArray(statsRaw)) {
           setStatsData(statsRaw.map((x) => normalizeStatsPoint(x)).filter(Boolean) as StatsDataPoint[])
         }
+      } else {
+        setStatsData([])
       }
     } catch {
-      // ignore
+      setDetail(null)
+      setDetailError('加载运行详情失败：网络错误')
     }
   }, [normalizeStatsPoint])
 
@@ -126,8 +135,12 @@ export function HistoryPage() {
 
   const fetchLogSummary = useCallback(async () => {
     if (!detail) return
+    setDetailError('')
     const res = await fetch(`/api/runs/${detail.meta.id}/log-summary`)
-    if (!res.ok) return
+    if (!res.ok) {
+      setDetailError(`加载日志摘要失败：${res.status} ${res.statusText || 'Request failed'}`)
+      return
+    }
     setLogSummary((await res.json()) as LogSummary)
   }, [detail])
 
@@ -249,10 +262,10 @@ export function HistoryPage() {
           />
         </div>
         <div className="2xl:col-span-4">
-          <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} statsRange={statsRange} onStatsTabChange={setStatsTab} onStatsRangeChange={setStatsRange} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
+          <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} statsRange={statsRange} detailError={detailError} onStatsTabChange={setStatsTab} onStatsRangeChange={setStatsRange} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
         </div>
         <div className="2xl:col-span-3">
-          <ArtifactsPanel detail={detail} logSummary={logSummary} onFetchLogSummary={fetchLogSummary} onExportReport={exportReport} />
+          <ArtifactsPanel detail={detail} logSummary={logSummary} detailError={detailError} onFetchLogSummary={fetchLogSummary} onExportReport={exportReport} />
         </div>
       </div>
     </div>

@@ -29,6 +29,7 @@ export function RealtimeMonitorPage() {
   const [runDetail, setRunDetail] = useState<RunDetail | null>(null)
   const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
   const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
+  const [loadError, setLoadError] = useState('')
   const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
   const [timeRange, setTimeRange] = useState<'15m' | '1h' | '6h' | '24h' | 'all'>('all')
   const [xDomain, setXDomain] = useState<{ min: number; max: number } | null>(null)
@@ -148,6 +149,7 @@ export function RealtimeMonitorPage() {
 
   const fetchRunData = useCallback(async (runId: string) => {
     if (!runId) return
+    setLoadError('')
     try {
       const [detailRes, statsRes, logRes] = await Promise.all([
         fetch(`/api/runs/${runId}`),
@@ -155,10 +157,15 @@ export function RealtimeMonitorPage() {
         fetch(`/api/runs/${runId}/log-summary`),
       ])
 
-      if (detailRes.ok) {
-        const detail = (await detailRes.json()) as RunDetail
-        setRunDetail(detail)
+      if (!detailRes.ok) {
+        setRunDetail(null)
+        setLogSummary(null)
+        setStatsData([])
+        setLoadError(`加载运行详情失败：${detailRes.status} ${detailRes.statusText || 'Request failed'}`)
+        return
       }
+      const detail = (await detailRes.json()) as RunDetail
+      setRunDetail(detail)
 
       if (statsRes.ok) {
         const raw = (await statsRes.json()) as unknown
@@ -166,14 +173,21 @@ export function RealtimeMonitorPage() {
           const points = raw.map(normalizeStatsPoint).filter(Boolean) as StatsDataPoint[]
           setStatsData(points)
         }
+      } else {
+        setStatsData([])
       }
 
       if (logRes.ok) {
         const summary = (await logRes.json()) as LogSummary
         setLogSummary(summary)
+      } else {
+        setLogSummary(null)
       }
     } catch {
-      // ignore
+      setRunDetail(null)
+      setLogSummary(null)
+      setStatsData([])
+      setLoadError('加载运行详情失败：网络错误')
     }
   }, [normalizeStatsPoint])
 
@@ -264,6 +278,7 @@ export function RealtimeMonitorPage() {
           </div>
         </CardHeader>
         <CardContent>
+          {loadError ? <p className="mb-3 text-sm text-red-600">{loadError}</p> : null}
           {visibleStatsData.length > 0 ? (
             <StatsChart
               data={visibleStatsData}
@@ -285,7 +300,7 @@ export function RealtimeMonitorPage() {
           <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
             <div><span className="text-muted-foreground">Run ID:</span> {activeRunId || '-'}</div>
             <div><span className="text-muted-foreground">状态:</span> {activeRun ? STATUS_LABEL[activeRun.status] ?? activeRun.status : '-'}</div>
-            <div><span className="text-muted-foreground">错误:</span> {activeRun?.error || '-'}</div>
+            <div><span className="text-muted-foreground">错误:</span> {runDetail?.meta.error || activeRun?.error || '-'}</div>
           </div>
 
           <div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -30,14 +30,69 @@ export function WorkflowStudioPage() {
 
   const [runError, setRunError] = useState('')
   const [running, setRunning] = useState(false)
+  const [activeRun, setActiveRun] = useState<RunState | null>(null)
 
-  const canRun = useMemo(() => compileResult.errors.length === 0 && compileResult.taskList.tasks.length > 0, [compileResult])
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('/api/status')
+        if (!res.ok) return
+        const state = (await res.json()) as RunState
+        if (!cancelled) {
+          setActiveRun(state.status === 'running' ? state : null)
+        }
+      } catch {
+        if (!cancelled) {
+          setActiveRun(null)
+        }
+      }
+    }
+
+    fetchStatus()
+    const timer = window.setInterval(fetchStatus, 3000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const canRun = useMemo(
+    () => compileResult.errors.length === 0 && compileResult.taskList.tasks.length > 0 && activeRun?.status !== 'running',
+    [activeRun?.status, compileResult]
+  )
+
+  const openActiveRun = (runId?: string) => {
+    if (!runId) return
+    navigate(`/monitor?runId=${runId}`)
+  }
+
+  const syncActiveRun = async () => {
+    try {
+      const res = await fetch('/api/status')
+      if (!res.ok) return null
+      const state = (await res.json()) as RunState
+      const next = state.status === 'running' ? state : null
+      setActiveRun(next)
+      return next
+    } catch {
+      return null
+    }
+  }
 
   const run = async () => {
     setRunError('')
     if (!canRun) return
     setRunning(true)
     try {
+      const currentRun = await syncActiveRun()
+      if (currentRun?.id) {
+        setRunError('已有运行中的任务，正在跳转到监控页。')
+        openActiveRun(currentRun.id)
+        return
+      }
+
       const res = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -45,6 +100,14 @@ export function WorkflowStudioPage() {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: '启动失败' }))
+        if (res.status === 409) {
+          const currentRunAfterConflict = await syncActiveRun()
+          if (currentRunAfterConflict?.id) {
+            setRunError('已有运行中的任务，正在跳转到监控页。')
+            openActiveRun(currentRunAfterConflict.id)
+            return
+          }
+        }
         setRunError(err.error || '启动失败')
         return
       }
@@ -72,9 +135,19 @@ export function WorkflowStudioPage() {
           <p className="text-xs text-muted-foreground">LLM 产出可直接映射到 Experiment JSON，并编译为 fio task list。</p>
           <div className="flex gap-2">
             <Button onClick={addStage} variant="outline">+ Stage</Button>
-            <Button onClick={run} disabled={!canRun || running}>{running ? '运行中…' : '编译并执行'}</Button>
+            <Button onClick={run} disabled={!canRun || running}>
+              {running ? '运行中…' : activeRun?.status === 'running' ? '已有任务运行中' : '编译并执行'}
+            </Button>
           </div>
           {runError ? <p className="text-sm text-red-600">{runError}</p> : null}
+          {activeRun?.status === 'running' ? (
+            <p className="text-sm text-amber-700">
+              当前已有运行中的任务。
+              <button className="ml-1 underline underline-offset-4" onClick={() => openActiveRun(activeRun.id)} type="button">
+                查看监控
+              </button>
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

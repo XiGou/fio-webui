@@ -34,3 +34,4 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends curl gnupg ca-certificates; \
     curl -fsSL https://deb.nodesource.com/setup_24.x | bash -; \
     apt-get install -y --no-install-recommends nodejs
+    apt-get install -y fio

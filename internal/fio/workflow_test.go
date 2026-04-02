@@ -18,7 +18,7 @@ func testGlobal() GlobalConfig {
 func testJob(name string) JobConfig {
 	return JobConfig{
 		Name:      name,
-		Filename:  "/tmp/fio",
+		Filename:  "./tmp/fio",
 		RW:        RWRandRead,
 		BS:        "4k",
 		Size:      "1G",

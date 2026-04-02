@@ -38,7 +38,7 @@ const defaultGlobal = {
 
 const baseJob = (overrides: Partial<JobConfig>): JobConfig => ({
   name: 'job1',
-  filename: '/tmp/fio-test',
+  filename: './tmp/fio-test',
   rw: 'randread',
   bs: '4k',
   size: '1G',
