@@ -58,7 +58,6 @@ describe('compileExperimentToTaskList with shared params', () => {
         {
           id: 'stage-1',
           name: 'Mixed RW',
-          mode: 'parallel',
           shared: {
             filename: '/dev/nvme0n1',
             size: '8G',
@@ -134,7 +133,6 @@ describe('compileExperimentToTaskList with shared params', () => {
         {
           id: 'stage-1',
           name: 'Overrides',
-          mode: 'parallel',
           shared: {
             filename: '/tmp/fio-test',
             rw: 'randread',

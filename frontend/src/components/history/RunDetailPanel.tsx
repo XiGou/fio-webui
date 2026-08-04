@@ -1,7 +1,6 @@
 import { Activity, Copy, FilePlus2, Play, Save, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatsChart } from '@/components/StatsChart'
 import { filterStatsByTimeRange } from '@/lib/statsFormat'
 import type { FioTaskList, StatsDataPoint } from '@/types/api'
@@ -43,10 +42,9 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detail
   const chartTypes: Array<'iops' | 'bw' | 'lat'> = compareMode ? ['iops', 'bw', 'lat'] : [statsTab]
 
   return (
-    <Card className="h-full">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-base">RunDetailPanel</CardTitle>
+    <section className="h-full bg-background p-4 lg:p-5">
+        <div className="mb-4 flex flex-col gap-3">
+          <div><h2 className="text-xs font-semibold">性能证据</h2><p className="text-[10px] uppercase text-muted-foreground">Performance evidence</p></div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" onClick={() => onAction('open-monitor')} disabled={!detail}><Activity className="h-4 w-4 mr-1" />打开监控</Button>
             <Button size="sm" variant="outline" onClick={() => onAction('restore-workflow')} disabled={!hasConfig(detail?.config ?? null)}><Play className="h-4 w-4 mr-1" />恢复到画布</Button>
@@ -56,12 +54,11 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detail
             <Button size="sm" variant="destructive" onClick={() => onAction('delete')} disabled={!detail}><Trash2 className="h-4 w-4 mr-1" />删除</Button>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3 max-h-[72vh] overflow-auto">
+      <div className="space-y-3 max-h-[calc(100vh-13rem)] overflow-auto">
         {detailError ? <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{detailError}</p> : null}
         {!detail ? <p className="text-sm text-muted-foreground">请选择左侧运行记录查看详情。</p> : (
           <>
-            <details open className="rounded border border-border p-2 text-xs">
+            <details open className="border border-border p-2 text-xs">
               <summary className="cursor-pointer font-medium">基础信息</summary>
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <div>ID: <code>{detail.meta.id}</code></div>
@@ -74,7 +71,7 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detail
               </div>
             </details>
             {detail.meta.summary && (
-              <details open className="rounded border border-border p-2 text-xs">
+              <details open className="border border-border p-2 text-xs">
                 <summary className="cursor-pointer font-medium">指标摘要</summary>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   <span>IOPS: {detail.meta.summary.iops.toFixed(0)}</span>
@@ -84,10 +81,10 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detail
               </details>
             )}
             {statsData.length > 0 && (
-              <div className="rounded border border-border p-3 space-y-3">
-                <div className="flex flex-wrap gap-2 text-xs">
+              <div className="border border-border p-3 space-y-3">
+                <div className="flex flex-wrap gap-2 text-xs" role="tablist" aria-label="报告指标">
                   {(['iops', 'bw', 'lat'] as const).map((tab) => (
-                    <button key={tab} className={`px-3 py-1.5 rounded-md border ${statsTab === tab ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted text-muted-foreground border-transparent'}`} onClick={() => onStatsTabChange(tab)}>{tab.toUpperCase()}</button>
+                    <button key={tab} role="tab" aria-selected={statsTab === tab} className={`px-3 py-1.5 rounded-md border ${statsTab === tab ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted text-muted-foreground border-transparent'}`} onClick={() => onStatsTabChange(tab)}>{tab.toUpperCase()}</button>
                   ))}
                   <button className={`px-3 py-1.5 rounded-md border ${compareMode ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted text-muted-foreground border-transparent'}`} onClick={() => setCompareMode((v) => !v)}>指标对比</button>
                   <select className="ml-auto rounded-md border bg-background px-2 py-1" value={statsRange} onChange={(e) => onStatsRangeChange(e.target.value as 'all' | '15m' | '1h' | '6h' | '24h')}>
@@ -125,7 +122,7 @@ export function RunDetailPanel({ detail, statsData, statsTab, statsRange, detail
             )}
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }

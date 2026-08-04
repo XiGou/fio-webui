@@ -4,17 +4,17 @@ import "strconv"
 
 // FioStatsIncrement represents delta statistics between two log file snapshots
 type FioStatsIncrement struct {
-	Time       int64   `json:"time"`         // milliseconds
-	Duration   float64 `json:"duration_sec"` // seconds between snapshots
-	IOPS       float64 `json:"iops"`
-	IOPSRead   float64 `json:"iops_read"`
-	IOPSWrite  float64 `json:"iops_write"`
-	BW         float64 `json:"bw"`       // KiB/sec
-	BWRead     float64 `json:"bw_read"`  // KiB/sec
-	BWWrite    float64 `json:"bw_write"` // KiB/sec
-	LatMean    float64 `json:"lat_mean"` // microseconds
-	LatP99     float64 `json:"lat_p99"`  // microseconds
-	LatP99_9   float64 `json:"lat_p99_9"`
+	Time      int64   `json:"time"`         // milliseconds
+	Duration  float64 `json:"duration_sec"` // seconds between snapshots
+	IOPS      float64 `json:"iops"`
+	IOPSRead  float64 `json:"iops_read"`
+	IOPSWrite float64 `json:"iops_write"`
+	BW        float64 `json:"bw"`       // KiB/sec
+	BWRead    float64 `json:"bw_read"`  // KiB/sec
+	BWWrite   float64 `json:"bw_write"` // KiB/sec
+	LatMean   float64 `json:"lat_mean"` // microseconds
+	LatP99    float64 `json:"lat_p99"`  // microseconds
+	LatP99_9  float64 `json:"lat_p99_9"`
 }
 
 // StatsDataPoint is the aggregated metrics structure used by the frontend charts.
@@ -62,11 +62,10 @@ func StatusToStatsDataPoint(status *StatusUpdate) *StatsDataPoint {
 		totalIOPSWrite += job.Write.IOPS
 		totalIOPS += job.Read.IOPS + job.Write.IOPS
 
-		// Bandwidth aggregation: fio reports bw in KiB (1024-byte)/s; convert to bytes/sec
-		const kib = 1024
-		totalBWRead += float64(job.Read.BW) * kib
-		totalBWWrite += float64(job.Write.BW) * kib
-		totalBW += float64(job.Read.BW+job.Write.BW) * kib
+		// Stream parsing normalizes every fio source to bytes/sec.
+		totalBWRead += float64(job.Read.BW)
+		totalBWWrite += float64(job.Write.BW)
+		totalBW += float64(job.Read.BW + job.Write.BW)
 
 		// Latency aggregation: prefer latency_ns, else latency_us, else clat_ns (fio status format)
 		latNs := job.Read.LatencyNs

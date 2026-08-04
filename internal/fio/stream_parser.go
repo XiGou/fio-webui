@@ -5,9 +5,19 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+)
+
+var (
+	// Regex to match fio status lines:
+	// "  read: IOPS=33.0k, BW=129MiB/s (135MB/s)(258MiB/2002msec)"
+	// "  write: IOPS=12.5k, BW=50.2MiB/s (52.6MB/s)(100MiB/2000msec)"
+	// Also handle lines without parenthetical bytes/sec: "  read: IOPS=33.0k, BW=129MiB/s (258MiB/2002msec)"
+	statusLineRegex = regexp.MustCompile(`^\s*(read|write|trim|sync):\s*IOPS=([\d.]+[kMGT]?),\s*BW=([\d.]+)\s*([kKMGT]?i?B/s)\s*(?:\([^)]*\))?\s*\((?:[^/]*)/(\d+)msec\)`)
 )
 
 // StatusUpdate represents the status JSON structure from fio's --status-interval output.
@@ -49,8 +59,8 @@ type FioClatNs struct {
 
 type IOStats struct {
 	IOPS      float64    `json:"iops"`
-	BW        int64      `json:"bw"`       // bytes/sec
-	Runtime   uint64     `json:"runtime"`  // milliseconds
+	BW        int64      `json:"bw"`      // bytes/sec
+	Runtime   uint64     `json:"runtime"` // milliseconds
 	IOStats   []Stat     `json:"iostats"`
 	LatencyNs []Latency  `json:"latency_ns"`
 	LatencyUs []Latency  `json:"latency_us"`
@@ -71,14 +81,14 @@ type Stat struct {
 
 // fioSingleJobLine is the per-line JSON format fio uses for --status-interval (single job object at top level)
 type fioSingleJobLine struct {
-	JobStart int64          `json:"job_start"`
-	JobName  string         `json:"jobname"`
-	GroupID  int            `json:"groupid"`
-	Error    int            `json:"error"`
-	ETA      uint64         `json:"eta"`
-	Elapsed  uint64         `json:"elapsed"`
-	Read     fioIOStatsAlt  `json:"read"`
-	Write    fioIOStatsAlt  `json:"write"`
+	JobStart int64         `json:"job_start"`
+	JobName  string        `json:"jobname"`
+	GroupID  int           `json:"groupid"`
+	Error    int           `json:"error"`
+	ETA      uint64        `json:"eta"`
+	Elapsed  uint64        `json:"elapsed"`
+	Read     fioIOStatsAlt `json:"read"`
+	Write    fioIOStatsAlt `json:"write"`
 }
 
 type fioIOStatsAlt struct {
@@ -259,12 +269,96 @@ func (p *StreamJSONParser) parse() {
 			continue
 		}
 
+		// Try to parse as standard fio status line
+		if matches := statusLineRegex.FindStringSubmatch(line); matches != nil {
+			if status := p.parseStatusLine(matches); status != nil {
+				p.handleStatusUpdate(lineCount, line, status)
+			}
+		}
+
 		// Regular non-JSON output line
 		if Debug {
 			log.Printf("[DEBUG] StreamJSONParser: Line %d is not valid JSON", lineCount)
 		}
 		p.sendOutput(lineCount, line)
 	}
+}
+
+// parseStatusLine converts a matched status line to a StatusUpdate
+func (p *StreamJSONParser) parseStatusLine(matches []string) *StatusUpdate {
+	// matches: [full, type, iops, bw, bw_unit, runtime_msec]
+	rwType := matches[1]
+	iopsStr := matches[2]
+	bwStr := matches[3]
+	bwUnit := matches[4]
+	runtimeStr := matches[5]
+
+	iops, _ := parseFioValue(iopsStr)
+	bwBytes, _ := parseBandwidthBytes(bwStr, bwUnit)
+	runtime, _ := strconv.ParseUint(runtimeStr, 10, 64)
+
+	status := &StatusUpdate{
+		Time: int64(time.Now().Unix()),
+		Jobs: []JobStatus{{
+			JobName: "fio", // generic
+			Read:    IOStats{},
+			Write:   IOStats{},
+		}},
+	}
+
+	if rwType == "read" {
+		status.Jobs[0].Read.IOPS = iops
+		status.Jobs[0].Read.BW = bwBytes
+		status.Jobs[0].Read.Runtime = runtime
+	} else if rwType == "write" {
+		status.Jobs[0].Write.IOPS = iops
+		status.Jobs[0].Write.BW = bwBytes
+		status.Jobs[0].Write.Runtime = runtime
+	}
+
+	return status
+}
+
+func parseBandwidthBytes(value, unit string) (int64, error) {
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, err
+	}
+	multipliers := map[string]float64{
+		"B/s":   1,
+		"kB/s":  1000,
+		"KB/s":  1000,
+		"MB/s":  1000 * 1000,
+		"GB/s":  1000 * 1000 * 1000,
+		"TB/s":  1000 * 1000 * 1000 * 1000,
+		"KiB/s": 1024,
+		"MiB/s": 1024 * 1024,
+		"GiB/s": 1024 * 1024 * 1024,
+		"TiB/s": 1024 * 1024 * 1024 * 1024,
+	}
+	multiplier, ok := multipliers[unit]
+	if !ok {
+		return 0, strconv.ErrSyntax
+	}
+	return int64(number * multiplier), nil
+}
+
+// parseFioValue parses values like "33.0k", "129", "1.2M"
+func parseFioValue(s string) (float64, error) {
+	s = strings.ToLower(s)
+	multiplier := 1.0
+	if strings.HasSuffix(s, "k") {
+		multiplier = 1000.0
+		s = s[:len(s)-1]
+	} else if strings.HasSuffix(s, "m") {
+		multiplier = 1000000.0
+		s = s[:len(s)-1]
+	} else if strings.HasSuffix(s, "g") {
+		multiplier = 1000000000.0
+		s = s[:len(s)-1]
+	}
+	val, err := strconv.ParseFloat(s, 64)
+	return val * multiplier, err
 }
 
 // handleStatusUpdate processes a valid status update
@@ -276,6 +370,7 @@ func (p *StreamJSONParser) handleStatusUpdate(lineCount int, lineStr string, sta
 		}
 
 		p.mu.Lock()
+		status = mergeStatusUpdates(p.lastStatus, status)
 		p.lastStatus = status
 		p.mu.Unlock()
 
@@ -297,6 +392,39 @@ func (p *StreamJSONParser) handleStatusUpdate(lineCount int, lineStr string, sta
 		}
 		p.sendOutput(lineCount, lineStr)
 	}
+}
+
+func mergeStatusUpdates(previous, current *StatusUpdate) *StatusUpdate {
+	if previous == nil || current == nil || previous.Time != current.Time {
+		return current
+	}
+
+	merged := *current
+	merged.Jobs = append([]JobStatus(nil), current.Jobs...)
+	jobIndex := make(map[string]int, len(merged.Jobs))
+	for index, job := range merged.Jobs {
+		jobIndex[job.JobName+"#"+strconv.Itoa(job.GroupID)] = index
+	}
+	for _, oldJob := range previous.Jobs {
+		key := oldJob.JobName + "#" + strconv.Itoa(oldJob.GroupID)
+		index, found := jobIndex[key]
+		if !found {
+			merged.Jobs = append(merged.Jobs, oldJob)
+			continue
+		}
+		job := merged.Jobs[index]
+		if job.Read.IOPS == 0 && job.Read.BW == 0 {
+			job.Read = oldJob.Read
+		}
+		if job.Write.IOPS == 0 && job.Write.BW == 0 {
+			job.Write = oldJob.Write
+		}
+		if job.Trim.IOPS == 0 && job.Trim.BW == 0 {
+			job.Trim = oldJob.Trim
+		}
+		merged.Jobs[index] = job
+	}
+	return &merged
 }
 
 // sendOutput sends a non-JSON output line to the output channel
@@ -360,7 +488,15 @@ func rawToStatusUpdate(raw *fioStatusUpdateRaw) *StatusUpdate {
 	} else {
 		return nil
 	}
-	return &StatusUpdate{Time: t, Jobs: raw.Jobs}
+	jobs := append([]JobStatus(nil), raw.Jobs...)
+	for index := range jobs {
+		// fio's JSON `bw` fields are KiB/s. Normalize them at the source boundary.
+		jobs[index].Read.BW *= 1024
+		jobs[index].Write.BW *= 1024
+		jobs[index].Trim.BW *= 1024
+		jobs[index].Sync.BW *= 1024
+	}
+	return &StatusUpdate{Time: t, Jobs: jobs}
 }
 
 // singleJobToStatusUpdate converts fio's single-job JSON line to StatusUpdate so we can emit stats.
@@ -429,13 +565,13 @@ func ConvertToStatsIncrement(status *StatusUpdate, prevStatus *StatusUpdate) *Fi
 	job := status.Jobs[0]
 
 	increment := &FioStatsIncrement{
-		Time:       status.Time,
-		IOPS:       job.Read.IOPS + job.Write.IOPS,
-		IOPSRead:   job.Read.IOPS,
-		IOPSWrite:  job.Write.IOPS,
-		BW:         float64(job.Read.BW+job.Write.BW) / 1024.0, // Convert bytes to KiB
-		BWRead:     float64(job.Read.BW) / 1024.0,
-		BWWrite:    float64(job.Write.BW) / 1024.0,
+		Time:      status.Time,
+		IOPS:      job.Read.IOPS + job.Write.IOPS,
+		IOPSRead:  job.Read.IOPS,
+		IOPSWrite: job.Write.IOPS,
+		BW:        float64(job.Read.BW+job.Write.BW) / 1024.0, // Convert bytes to KiB
+		BWRead:    float64(job.Read.BW) / 1024.0,
+		BWWrite:   float64(job.Write.BW) / 1024.0,
 	}
 
 	if prevStatus != nil && len(prevStatus.Jobs) > 0 {

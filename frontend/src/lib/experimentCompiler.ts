@@ -33,16 +33,15 @@ export const defaultJob = (): ExperimentJob => ({
 
 export const defaultExperiment = (): Experiment => ({
   id: `exp-${uid()}`,
-  name: 'AI Harness Experiment',
-  description: 'Stage-based fio experiment',
+  name: 'NVMe 基准验证',
+  description: '可复用的 fio 测试流水线',
   global: { ...DEFAULT_GLOBAL },
   stages: [defaultStage()],
 })
 
 export const defaultStage = () => ({
   id: `stage-${uid()}`,
-  name: 'Warmup',
-  mode: 'sequential' as const,
+  name: '预热',
   shared: {
     filename: '/tmp/fio-test',
     size: '1G',
@@ -61,6 +60,63 @@ const DEFAULT_JOB_PARAMS: FioParameterMap = {
   iodepth: 1,
   rwmixread: 70,
 }
+
+function splitJobsAtBarriers(jobs: JobConfig[]): JobConfig[][] {
+  if (!jobs.length) return [[]]
+
+  const segments: JobConfig[][] = []
+  let current: JobConfig[] = []
+  for (const job of jobs) {
+    current.push(job)
+    if (job.stonewallAfter) {
+      segments.push(current)
+      current = []
+    }
+  }
+  if (current.length) segments.push(current)
+  return segments
+}
+
+export function experimentFromTaskList(taskList: FioTaskList, sourceRunId?: string): Experiment {
+  const firstGlobal = taskList.tasks[0]?.global ?? DEFAULT_GLOBAL
+  return {
+    id: `exp-${uid()}`,
+    name: sourceRunId ? `运行 ${sourceRunId.slice(0, 8)} 的副本` : '恢复的测试流水线',
+    description: sourceRunId ? `由历史运行 ${sourceRunId} 恢复` : '由 fio 任务列表恢复',
+    global: { ...firstGlobal },
+    stages: taskList.tasks.flatMap((task, taskIndex) => {
+      const segments = splitJobsAtBarriers(task.jobs)
+      const baseName = task.name || `节点 ${taskIndex + 1}`
+      const shared = Object.fromEntries(
+        Object.entries(task.global).filter(([key, value]) => value !== firstGlobal[key as keyof GlobalConfig]),
+      ) as FioParameterMap
+
+      return segments.map((jobs, segmentIndex) => ({
+        id: `stage-${uid()}-${taskIndex}-${segmentIndex}`,
+        name: segments.length === 1 ? baseName : `${baseName} · ${segmentIndex + 1}`,
+        shared: { ...shared },
+        jobs: jobs.map((job, jobIndex) => ({
+          id: `job-${uid()}-${taskIndex}-${segmentIndex}-${jobIndex}`,
+          name: job.name || `job-${jobIndex + 1}`,
+          overrides: {
+            filename: job.filename,
+            rw: job.rw,
+            bs: job.bs,
+            size: job.size,
+            numjobs: job.numjobs,
+            iodepth: job.iodepth,
+            rwmixread: job.rwmixread,
+            ...(job.rate ? { rate: job.rate } : {}),
+            ...(job.runtime ? { runtime: job.runtime } : {}),
+            ...(job.ioengine ? { ioengine: job.ioengine } : {}),
+            ...(job.extra_options ?? {}),
+          },
+        })),
+      }))
+    }),
+  }
+}
+
 
 function asString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length > 0 ? value : fallback
@@ -111,13 +167,13 @@ export function compileExperimentToTaskList(experiment: Experiment): CompileExpe
   const taskList: FioTaskList = { tasks: [] }
 
   if (!experiment.stages.length) {
-    errors.push('至少需要 1 个 Stage。')
+    errors.push('至少需要 1 个节点。')
     return { taskList, errors, warnings }
   }
 
   for (const stage of experiment.stages) {
     if (!stage.jobs.length) {
-      errors.push(`Stage "${stage.name}" 至少需要 1 个 Job。`)
+      errors.push(`节点 "${stage.name}" 至少需要 1 个 Job。`)
       continue
     }
 
@@ -128,14 +184,8 @@ export function compileExperimentToTaskList(experiment: Experiment): CompileExpe
       return buildResolvedJob(job.name, effective, job.overrides, idx)
     })
 
-    if (stage.mode === 'sequential') {
-      for (let i = 0; i < jobs.length; i++) {
-        jobs[i] = { ...jobs[i], stonewallAfter: i !== jobs.length - 1 }
-      }
-    }
-
     taskList.tasks.push({
-      name: stage.name || `stage-${taskList.tasks.length + 1}`,
+      name: stage.name || `node-${taskList.tasks.length + 1}`,
       global,
       jobs,
     })

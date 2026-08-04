@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "setup:ui-harness": "npx skills add pbakaus/impeccable --yes --global",
+    "setup:impeccable": "npx impeccable install --providers=codex --scope=project",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest",

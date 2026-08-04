@@ -1,6 +1,5 @@
 import type { FioOptionValue } from '@/types/api'
 
-export type StageMode = 'sequential' | 'parallel'
 export type FioParameterMap = Record<string, FioOptionValue>
 
 export interface ExperimentJob {
@@ -12,7 +11,6 @@ export interface ExperimentJob {
 export interface ExperimentStage {
   id: string
   name: string
-  mode: StageMode
   shared: FioParameterMap
   jobs: ExperimentJob[]
 }

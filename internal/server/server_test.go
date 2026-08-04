@@ -31,6 +31,28 @@ func TestNewStaticHandlerServesEmbeddedDist(t *testing.T) {
 	}
 }
 
+func TestNewStaticHandlerServesIndexForClientRoute(t *testing.T) {
+	t.Parallel()
+
+	handler, err := newStaticHandler(fstest.MapFS{
+		"web/dist/index.html": &fstest.MapFile{Data: []byte("app shell")},
+	})
+	if err != nil {
+		t.Fatalf("newStaticHandler() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/monitor?runId=run-1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if body := rec.Body.String(); body != "app shell" {
+		t.Fatalf("body = %q, want %q", body, "app shell")
+	}
+}
+
 func TestNewStaticHandlerFallsBackWithoutDist(t *testing.T) {
 	t.Parallel()
 

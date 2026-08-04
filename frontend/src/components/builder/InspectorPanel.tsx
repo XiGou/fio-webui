@@ -86,7 +86,7 @@ function CustomParameterSection({
   }
 
   return (
-    <section className="space-y-3 rounded-2xl border border-dashed border-border p-3">
+    <section className="space-y-3 border border-dashed border-border p-3">
       <div>
         <h4 className="text-sm font-medium">{title}</h4>
         <p className="text-xs text-muted-foreground">参数目录之外的 fio 选项会直接透传给运行配置。</p>
@@ -162,10 +162,12 @@ function CustomParameterSection({
 }
 
 function FieldControl({
+  id,
   field,
   value,
   onChange,
 }: {
+  id: string
   field: FioParameterField
   value: FioOptionValue | undefined
   onChange: (value: FioOptionValue) => void
@@ -173,7 +175,7 @@ function FieldControl({
   if (field.type === 'boolean') {
     return (
       <div className="flex h-10 items-center rounded-md border border-border px-3">
-        <Switch checked={Boolean(value)} onCheckedChange={(checked) => onChange(checked)} />
+        <Switch id={id} checked={Boolean(value)} onCheckedChange={(checked) => onChange(checked)} />
       </div>
     )
   }
@@ -181,7 +183,7 @@ function FieldControl({
   if (field.type === 'select') {
     return (
       <Select value={typeof value === 'string' ? value : undefined} onValueChange={onChange}>
-        <SelectTrigger><SelectValue placeholder={field.placeholder ?? field.label} /></SelectTrigger>
+        <SelectTrigger id={id}><SelectValue placeholder={field.placeholder ?? field.label} /></SelectTrigger>
         <SelectContent>
           {(field.options ?? []).map((option) => (
             <SelectItem key={option} value={option}>{option}</SelectItem>
@@ -193,6 +195,7 @@ function FieldControl({
 
   return (
     <Input
+      id={id}
       value={value === undefined ? '' : String(value)}
       type={field.type === 'number' ? 'number' : 'text'}
       placeholder={field.placeholder}
@@ -250,27 +253,15 @@ export function InspectorPanel({ experimentGlobal, options, stage, job, onUpdate
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <section className="space-y-3">
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Stage 名称</Label>
-            <Input value={stage.name} onChange={(event) => onUpdateStage({ name: event.target.value })} />
-          </div>
-          <div className="space-y-2">
-            <Label>Stage 模式</Label>
-            <Select value={stage.mode} onValueChange={(value) => onUpdateStage({ mode: value as ExperimentStage['mode'] })}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="sequential">sequential</SelectItem>
-                <SelectItem value="parallel">parallel</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <div className="space-y-2">
+          <Label htmlFor="inspector-stage-name">节点名称</Label>
+          <Input id="inspector-stage-name" value={stage.name} onChange={(event) => onUpdateStage({ name: event.target.value })} />
         </div>
 
-        <div className="rounded-2xl border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
-          当前 Stage 共享了 {Object.keys(stage.shared).length} 个参数，所有 Job 默认继承这些值。选中 Job 后，只需要填写覆盖项。
+        <div className="border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+          当前节点共享了 {Object.keys(stage.shared).length} 个参数，节点内 Job 并行执行并默认继承这些值。选中 Job 后，只需要填写覆盖项。
         </div>
       </section>
 
@@ -278,31 +269,31 @@ export function InspectorPanel({ experimentGlobal, options, stage, job, onUpdate
         <div className="flex items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-medium">共享参数</h3>
-            <p className="text-xs text-muted-foreground">映射到当前 Stage 的共享配置区域。</p>
+            <p className="text-xs text-muted-foreground">映射到当前节点的共享配置区域。</p>
           </div>
           <Input className="max-w-56" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索参数 key" />
         </div>
 
         <div className="space-y-3">
           {visibleGroups.map((group) => (
-            <details key={group.id} className="rounded-2xl border border-border p-3" open={!group.collapsedByDefault || normalizedSearch.length > 0}>
+            <details key={group.id} className="border border-border p-3" open={!group.collapsedByDefault || normalizedSearch.length > 0}>
               <summary className="cursor-pointer text-sm font-medium">{group.title}</summary>
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="mt-3 grid gap-3 2xl:grid-cols-2">
                 {group.fields.map((field) => {
                   const isCustomized = field.key in stage.shared
                   const sharedValue = resolvedShared[field.key]
                   return (
-                    <div key={field.key} className="space-y-2 rounded-xl border border-border/70 bg-background p-3">
+                    <div key={field.key} className="space-y-2 border border-border/70 bg-background p-3">
                       <div className="flex items-center justify-between gap-2">
-                        <Label className="text-xs font-medium">{field.label}</Label>
+                        <Label htmlFor={`stage-field-${field.key}`} className="text-xs font-medium">{field.label}</Label>
                         <div className="flex items-center gap-2">
                           <span className={`rounded-full px-2 py-0.5 text-[10px] ${isCustomized ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                            {isCustomized ? 'stage' : 'default'}
+                            {isCustomized ? 'node' : 'default'}
                           </span>
                           {isCustomized ? <Button size="sm" variant="ghost" onClick={() => clearStageParam(field.key)}>恢复默认</Button> : null}
                         </div>
                       </div>
-                      <FieldControl field={field} value={sharedValue} onChange={(value) => updateStageParam(field.key, value)} />
+                      <FieldControl id={`stage-field-${field.key}`} field={field} value={sharedValue} onChange={(value) => updateStageParam(field.key, value)} />
                     </div>
                   )
                 })}
@@ -322,27 +313,27 @@ export function InspectorPanel({ experimentGlobal, options, stage, job, onUpdate
       {job ? (
         <section className="space-y-3 border-t border-border pt-5">
           <div className="space-y-2">
-            <Label>Job 名称</Label>
-            <Input value={job.name} onChange={(event) => onUpdateJob({ name: event.target.value })} />
+            <Label htmlFor="inspector-job-name">Job 名称</Label>
+            <Input id="inspector-job-name" value={job.name} onChange={(event) => onUpdateJob({ name: event.target.value })} />
           </div>
 
-          <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3 text-xs text-muted-foreground">
+          <div className="border border-border bg-primary/5 p-3 text-xs text-muted-foreground">
             当前 Job 有 {Object.keys(job.overrides).length} 个覆盖项；未覆盖字段会继续继承共享参数。
           </div>
 
           <div className="space-y-3">
             {visibleGroups.map((group) => (
-              <details key={`job-${group.id}`} className="rounded-2xl border border-border p-3" open={!group.collapsedByDefault || normalizedSearch.length > 0}>
+              <details key={`job-${group.id}`} className="border border-border p-3" open={!group.collapsedByDefault || normalizedSearch.length > 0}>
                 <summary className="cursor-pointer text-sm font-medium">Job 覆盖 · {group.title}</summary>
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <div className="mt-3 grid gap-3 2xl:grid-cols-2">
                   {group.fields.map((field) => {
                     const overridden = field.key in job.overrides
                     const inherited = resolvedShared[field.key]
                     const displayValue = effectiveJob?.[field.key]
                     return (
-                      <div key={`job-${field.key}`} className="space-y-2 rounded-xl border border-border/70 bg-background p-3">
+                      <div key={`job-${field.key}`} className="space-y-2 border border-border/70 bg-background p-3">
                         <div className="flex items-center justify-between gap-2">
-                          <Label className="text-xs font-medium">{field.label}</Label>
+                          <Label htmlFor={`job-field-${field.key}`} className="text-xs font-medium">{field.label}</Label>
                           {overridden ? (
                             <Button size="sm" variant="ghost" onClick={() => clearJobOverride(field.key)}>恢复继承</Button>
                           ) : (
@@ -350,7 +341,7 @@ export function InspectorPanel({ experimentGlobal, options, stage, job, onUpdate
                           )}
                         </div>
                         {overridden ? (
-                          <FieldControl field={field} value={displayValue} onChange={(value) => setJobOverride(field.key, value)} />
+                          <FieldControl id={`job-field-${field.key}`} field={field} value={displayValue} onChange={(value) => setJobOverride(field.key, value)} />
                         ) : (
                           <div className="rounded-md border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
                             继承共享值：{formatInherited(inherited)}
@@ -372,7 +363,7 @@ export function InspectorPanel({ experimentGlobal, options, stage, job, onUpdate
           />
         </section>
       ) : (
-        <section className="rounded-2xl border border-dashed border-border p-4 text-sm text-muted-foreground">
+        <section className="border border-dashed border-border p-4 text-sm text-muted-foreground">
           选择一个 Job 后，这里会显示覆盖参数编辑器。每个字段都可以保持继承，或按需覆盖为当前 Job 的特化值。
         </section>
       )}

@@ -8,6 +8,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -120,7 +122,22 @@ func newStaticHandler(webFS fs.FS) (http.Handler, error) {
 	distFS, err := fs.Sub(webFS, "web/dist")
 	if err == nil {
 		if _, statErr := fs.Stat(distFS, "."); statErr == nil {
-			return http.FileServer(http.FS(distFS)), nil
+			fileServer := http.FileServer(http.FS(distFS))
+			indexHTML, readErr := fs.ReadFile(distFS, "index.html")
+			if readErr != nil {
+				return nil, readErr
+			}
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assetPath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+				if assetPath != "." && assetPath != "" {
+					if _, assetErr := fs.Stat(distFS, assetPath); assetErr == nil || path.Ext(assetPath) != "" {
+						fileServer.ServeHTTP(w, r)
+						return
+					}
+				}
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write(indexHTML)
+			}), nil
 		} else if !errors.Is(statErr, fs.ErrNotExist) {
 			return nil, statErr
 		}

@@ -233,6 +233,16 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(summary)
 			return
 		}
+		if sub == "output" {
+			output, err := s.runStore.GetOutput(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte(output))
+			return
+		}
 		if sub == "stats" {
 			points, err := s.runStore.GetStats(id)
 			if err != nil {

@@ -16,12 +16,17 @@ export function ansiToHtml(text: string): string {
   let currentSpan: string | null = null
   let classes = ''
 
+  // ANSI control bytes are intentional in these terminal escape patterns.
+  // eslint-disable-next-line no-control-regex
   const cleaned = text.replace(/\x1b\[2J/g, '').replace(/\x1b\[H/g, '')
+  // eslint-disable-next-line no-control-regex
   const parts = cleaned.split(/(\x1b\[[0-9;]*m)/)
 
   let html = ''
   for (const part of parts) {
+    // eslint-disable-next-line no-control-regex
     if (part.match(/\x1b\[[\d;]*m/)) {
+      // eslint-disable-next-line no-control-regex
       const match = part.match(/\x1b\[([0-9;]*)m/)
       const codes = (match?.[1] ?? '').split(';')
       classes = ''

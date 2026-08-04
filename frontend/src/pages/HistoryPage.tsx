@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { History } from 'lucide-react'
+import { FileChartColumn, History } from 'lucide-react'
 import { addUserPreset, buildConfigSummaryFromJobs } from '@/lib/userPresets'
 import { RunsListPanel } from '@/components/history/RunsListPanel'
 import { RunDetailPanel } from '@/components/history/RunDetailPanel'
@@ -149,9 +149,9 @@ export function HistoryPage() {
     navigate('/', { replace: true, state: { restoreRunConfig: detail.config, restoreRunId: detail.meta.id } })
   }, [detail, navigate])
 
-  const duplicateToLegacy = useCallback(() => {
+  const duplicateToPipeline = useCallback(() => {
     if (!detail?.config?.tasks?.length) return
-    navigate('/legacy', { replace: true, state: { runConfig: detail.config } })
+    navigate('/', { state: { restoreRunConfig: detail.config, restoreRunId: detail.meta.id } })
   }, [detail, navigate])
 
   const saveAsTemplate = useCallback(() => {
@@ -195,11 +195,11 @@ export function HistoryPage() {
   const onAction = useCallback((action: HistoryAction) => {
     if (action === 'open-monitor' && detail) navigate(`/monitor?runId=${detail.meta.id}`)
     if (action === 'restore-workflow') restoreToWorkflow()
-    if (action === 'duplicate' || action === 'rerun') duplicateToLegacy()
+    if (action === 'duplicate' || action === 'rerun') duplicateToPipeline()
     if (action === 'save-template') saveAsTemplate()
     if (action === 'export-report') exportReport()
     if (action === 'delete' && detail) deleteRuns([detail.meta.id])
-  }, [deleteRuns, detail, duplicateToLegacy, exportReport, navigate, restoreToWorkflow, saveAsTemplate])
+  }, [deleteRuns, detail, duplicateToPipeline, exportReport, navigate, restoreToWorkflow, saveAsTemplate])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -237,13 +237,14 @@ export function HistoryPage() {
   if (loading) return <div className="flex items-center justify-center py-12"><p className="text-muted-foreground">加载中...</p></div>
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <h2 className="text-lg font-semibold text-foreground flex items-center gap-2"><History className="h-5 w-5" />历史任务</h2>
-        <p className="text-sm text-muted-foreground">快捷键：Ctrl/Cmd+K 搜索，Ctrl/Cmd+Enter 复制运行，Ctrl/Cmd+E 导出，Delete 删除。</p>
-      </div>
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-12">
-        <div className="2xl:col-span-5">
+    <div className="min-h-full bg-workbench">
+      <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 lg:px-6">
+        <div className="flex h-8 w-8 items-center justify-center bg-foreground text-background"><History className="h-4 w-4" /></div>
+        <div className="min-w-0 flex-1"><h1 className="text-base font-semibold">运行与报告</h1><p className="text-[11px] text-muted-foreground">每次运行的配置、性能采样、日志和报告保存在同一记录下。</p></div>
+        <div className="flex items-center gap-2 border-l border-border pl-4 text-xs"><FileChartColumn className="h-4 w-4 text-primary" /><span><strong className="font-mono text-base">{runs.length}</strong><small className="ml-1 text-muted-foreground">runs</small></span></div>
+      </header>
+      <div className="grid grid-cols-1 xl:grid-cols-12">
+        <div className="xl:col-span-5">
           <RunsListPanel
             searchInputRef={searchInputRef}
             runs={filteredRuns}
@@ -263,10 +264,10 @@ export function HistoryPage() {
             formatBytes={formatBytes}
           />
         </div>
-        <div className="2xl:col-span-4">
+        <div className="border-t border-border xl:col-span-4 xl:border-l xl:border-t-0">
           <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} statsRange={statsRange} detailError={detailError} onStatsTabChange={setStatsTab} onStatsRangeChange={setStatsRange} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
         </div>
-        <div className="2xl:col-span-3">
+        <div className="border-t border-border xl:col-span-3 xl:border-l xl:border-t-0">
           <ArtifactsPanel detail={detail} logSummary={logSummary} detailError={detailError} onFetchLogSummary={fetchLogSummary} onExportReport={exportReport} />
         </div>
       </div>
