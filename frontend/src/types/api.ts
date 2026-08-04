@@ -162,3 +162,61 @@ export interface StatsDataPoint {
   latP99: number // ms
   latMax: number // ms
 }
+
+export interface ReportSeriesPoint {
+  time: number // elapsed seconds across all ordered nodes
+  stage_index: number
+  iops: number
+  iopsRead: number
+  iopsWrite: number
+  bw: number // MiB/s
+  bwRead: number
+  bwWrite: number
+  latMean: number // ms
+  latP99: number
+  latMax: number
+}
+
+export interface ReportStageBoundary {
+  index: number
+  name: string
+  start_seconds: number
+  end_seconds: number
+  job_count: number
+}
+
+export interface ReportDataSource {
+  kind: 'fio-task-logs' | 'stats-jsonl-fallback'
+  files: string[]
+  latency_mode: 'histogram' | 'histogram+window-fallback' | 'window-log-fallback' | 'status-percentiles' | 'unavailable'
+  sample_interval_ms?: number
+}
+
+export interface ReportSummary {
+  sample_count: number
+  duration_seconds: number
+  mean_iops: number
+  peak_iops: number
+  mean_bandwidth_mib: number
+  peak_bandwidth_mib: number
+  mean_latency_ms: number
+  p99_latency_ms: number
+  peak_latency_ms: number
+}
+
+export interface RunReportDTO {
+  meta: RunRecord
+  config: {
+    task_list?: FioTaskList
+    workflow?: unknown
+    metadata?: Record<string, unknown>
+  }
+  stats: StatsDataPoint[]
+  series: ReportSeriesPoint[]
+  stages: ReportStageBoundary[]
+  source: ReportDataSource
+  summary: ReportSummary
+  log_summary: LogSummary
+  errors: string[]
+  exported_at: string
+}

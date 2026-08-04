@@ -55,10 +55,10 @@ func TestFioConfigToINI_EmitsJobExtraOptions(t *testing.T) {
 				NumJobs:  1,
 				IODepth:  32,
 				ExtraOptions: map[string]any{
-					"verify":     "crc32c",
-					"direct":     false,
-					"directory":  "/mnt/fio",
-					"rate_iops":  32000,
+					"verify":      "crc32c",
+					"direct":      false,
+					"directory":   "/mnt/fio",
+					"rate_iops":   32000,
 					"norandommap": true,
 				},
 			},
@@ -77,5 +77,29 @@ func TestFioConfigToINI_EmitsJobExtraOptions(t *testing.T) {
 		if !strings.Contains(got, needle) {
 			t.Fatalf("expected %q in jobfile, got:\n%s", needle, got)
 		}
+	}
+}
+
+func TestFioConfigToINI_EnablesMeanAndHistogramLatencyLogs(t *testing.T) {
+	t.Parallel()
+
+	cfg := &FioConfig{
+		Global: DefaultGlobalConfig(),
+		Jobs:   []JobConfig{DefaultJobConfig()},
+	}
+	cfg.Global.LogAvgMsec = 500
+
+	got := cfg.ToINI("/tmp/task0", -1)
+	for _, expected := range []string{
+		"log_hist_msec=500\n",
+		"write_lat_log=/tmp/task0\n",
+		"write_hist_log=/tmp/task0\n",
+	} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected %q in jobfile, got:\n%s", expected, got)
+		}
+	}
+	if strings.Contains(got, "log_max_value") {
+		t.Fatalf("did not expect log_max_value in jobfile, got:\n%s", got)
 	}
 }

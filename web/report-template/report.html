@@ -3,433 +3,412 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FIO Run Report</title>
+  <title>FIO WebUI 性能报告</title>
   <style>
+    __UPLOT_CSS__
+
     :root {
       color-scheme: light;
-      font-family: "Segoe UI", "PingFang SC", "Noto Sans SC", sans-serif;
-      --bg: #f3f5f9;
-      --panel: #ffffff;
-      --text: #172033;
-      --muted: #5d6b85;
-      --line: #d8deea;
-      --accent: #2553d6;
-      --accent-soft: rgba(37, 83, 214, 0.1);
-      --success: #0f8a4b;
-      --danger: #b42318;
-      --shadow: 0 18px 48px rgba(23, 32, 51, 0.08);
+      --background: hsl(210 20% 98%);
+      --foreground: hsl(216 20% 13%);
+      --surface: hsl(0 0% 100%);
+      --workbench: hsl(210 18% 95%);
+      --muted: hsl(210 16% 94%);
+      --muted-foreground: hsl(215 12% 43%);
+      --border: hsl(210 13% 84%);
+      --primary: hsl(162 72% 27%);
+      --live: hsl(190 76% 34%);
+      --warning: hsl(36 92% 42%);
+      --destructive: hsl(0 67% 45%);
+      font-family: "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
     }
 
-    * { box-sizing: border-box; }
-    body { margin: 0; background: linear-gradient(180deg, #eef2f8 0%, #f8fafc 100%); color: var(--text); }
-    .shell { max-width: 1240px; margin: 0 auto; padding: 28px 20px 48px; }
-    .hero { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr); align-items: start; }
-    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); }
-    .hero-main { padding: 28px; }
-    .hero-meta { padding: 24px; }
-    .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
-    h1 { margin: 14px 0 8px; font-size: clamp(30px, 4vw, 44px); line-height: 1.05; }
-    .subtitle { margin: 0; max-width: 58ch; color: var(--muted); line-height: 1.65; font-size: 14px; }
-    .meta-grid { display: grid; gap: 12px; }
-    .meta-item { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
-    .meta-item:last-child { border-bottom: 0; padding-bottom: 0; }
-    .meta-label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-    .meta-value { font-size: 14px; word-break: break-word; }
-    .cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-top: 22px; }
-    .stat { padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: linear-gradient(180deg, #fff 0%, #f8fafc 100%); }
-    .stat-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-    .stat-value { font-size: 24px; font-weight: 700; line-height: 1.1; }
-    .stat-note { margin-top: 4px; color: var(--muted); font-size: 12px; }
-    .section { margin-top: 18px; padding: 22px; }
-    .section-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-    .section h2 { margin: 0; font-size: 18px; }
-    .section p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    button, select {
-      border: 1px solid var(--line);
-      background: #fff;
-      border-radius: 999px;
-      padding: 8px 14px;
-      font: inherit;
-      cursor: pointer;
-      color: var(--text);
-    }
-    button.active { background: var(--text); border-color: var(--text); color: #fff; }
-    .metric-strip { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 16px; }
-    .metric-card { padding: 16px; border-radius: 16px; background: #f8fafc; border: 1px solid var(--line); }
-    .metric-card span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
-    .metric-card strong { font-size: 22px; }
-    .chart-wrap { border-radius: 20px; background: #fbfcfe; border: 1px solid var(--line); padding: 14px; }
-    .chart-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
-    canvas { width: 100%; height: auto; border-radius: 12px; background: #fff; }
-    .grid-2 { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .subpanel { padding: 18px; border-radius: 18px; background: #fbfcfe; border: 1px solid var(--line); }
-    .subpanel h3 { margin: 0 0 12px; font-size: 15px; }
-    pre { margin: 0; padding: 14px; background: #101725; color: #e6edf8; border-radius: 14px; white-space: pre-wrap; word-break: break-word; overflow: auto; max-height: 420px; font-size: 12px; line-height: 1.65; }
-    .error-list { margin: 0; padding-left: 18px; color: var(--danger); line-height: 1.7; }
-    .empty { color: var(--muted); font-size: 13px; }
-    .status-finished { color: var(--success); }
-    .status-error { color: var(--danger); }
-    .status-running { color: var(--accent); }
+    * { box-sizing: border-box; letter-spacing: 0; }
+    body { margin: 0; min-width: 320px; background: var(--workbench); color: var(--foreground); font-size: 14px; }
+    button { font: inherit; }
+    .shell { width: min(1440px, 100%); margin: 0 auto; border-inline: 1px solid var(--border); background: var(--surface); }
+    .topbar { display: flex; min-height: 64px; flex-wrap: wrap; align-items: center; gap: 14px; border-bottom: 1px solid var(--border); padding: 10px 20px; }
+    .mark { display: grid; width: 34px; height: 34px; place-items: center; background: var(--foreground); color: var(--surface); font: 700 11px ui-monospace, monospace; }
+    .title { min-width: 0; flex: 1; }
+    h1 { margin: 0; font-size: 16px; line-height: 1.35; }
+    .run-id { margin: 3px 0 0; overflow: hidden; color: var(--muted-foreground); font: 10px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .status { display: inline-flex; height: 22px; align-items: center; border: 1px solid var(--border); border-radius: 3px; padding: 0 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+    .status.finished { border-color: hsl(162 35% 75%); background: hsl(164 28% 93%); color: var(--primary); }
+    .status.error { border-color: hsl(0 50% 82%); background: hsl(0 50% 96%); color: var(--destructive); }
+    .status.running { border-color: hsl(190 45% 78%); background: hsl(190 45% 95%); color: var(--live); }
+    .generated { color: var(--muted-foreground); font-size: 11px; }
 
-    @media (max-width: 960px) {
-      .hero, .grid-2 { grid-template-columns: 1fr; }
-      .hero-main, .hero-meta, .section { padding: 20px; }
+    .meta-band { display: grid; border-bottom: 1px solid var(--border); grid-template-columns: 1.2fr repeat(3, 1fr); }
+    .meta-cell { min-width: 0; border-right: 1px solid var(--border); padding: 14px 16px; }
+    .meta-cell:last-child { border-right: 0; }
+    .label { display: block; margin-bottom: 5px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; }
+    .value { overflow-wrap: anywhere; font-size: 12px; font-weight: 600; }
+    .value.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
+    .note { margin-top: 4px; color: var(--muted-foreground); font-size: 10px; }
+
+    .summary-band { display: grid; border-bottom: 1px solid var(--border); grid-template-columns: repeat(3, 1fr); }
+    .metric { border-right: 1px solid var(--border); padding: 16px; }
+    .metric:last-child { border-right: 0; }
+    .metric h2 { margin: 0; font-size: 12px; }
+    .metric dl { display: grid; margin: 12px 0 0; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .metric.iops dl, .metric.bw dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    dt { color: var(--muted-foreground); font-size: 9px; }
+    dd { margin: 4px 0 0; font: 700 17px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .metric.latency dd { font-size: 14px; }
+    .p99 { color: hsl(36 92% 34%); }
+    .max { color: var(--destructive); }
+
+    .timeline-section { border-bottom: 1px solid var(--border); padding: 14px 16px; }
+    .section-title { margin: 0; font-size: 12px; }
+    .section-note { margin: 3px 0 0; color: var(--muted-foreground); font-size: 10px; }
+    .timeline-scroll { margin-top: 10px; overflow-x: auto; border: 1px solid var(--border); background: var(--workbench); }
+    .timeline { display: flex; min-width: 620px; }
+    .stage { min-width: 126px; border-right: 1px solid var(--border); padding: 9px 11px; }
+    .stage:last-child { border-right: 0; }
+    .stage-op { color: var(--muted-foreground); font: 9px ui-monospace, monospace; }
+    .stage-name { display: block; margin-top: 3px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .stage-meta { display: block; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; }
+
+    .charts { display: grid; gap: 14px; background: var(--workbench); padding: 16px; }
+    .chart-panel { min-width: 0; border: 1px solid var(--border); background: var(--surface); }
+    .chart-head { display: flex; min-height: 40px; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); padding: 7px 11px; }
+    .chart-head h2 { margin: 0; font-size: 12px; }
+    .chart-stats { color: var(--muted-foreground); font: 10px ui-monospace, monospace; }
+    .chart { min-width: 0; overflow: hidden; padding: 4px 8px 8px; }
+    .chart .u-wrap { font-family: "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif; }
+    .chart .u-legend { margin: 0 4px 4px 62px; text-align: left; color: var(--muted-foreground); font-size: 10px; }
+    .chart .u-legend .u-series { display: inline-flex; width: auto; align-items: center; margin-right: 14px; }
+    .chart .u-legend .u-value { min-width: 60px; color: var(--foreground); font-family: ui-monospace, monospace; }
+    .empty-chart { display: grid; min-height: 220px; place-items: center; color: var(--muted-foreground); font-size: 12px; }
+
+    .evidence { display: grid; border-top: 1px solid var(--border); grid-template-columns: 1fr 1fr; }
+    .evidence-section { min-width: 0; padding: 16px; }
+    .evidence-section:first-child { border-right: 1px solid var(--border); }
+    .file-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px; }
+    .file { border: 1px solid var(--border); border-radius: 3px; background: var(--muted); padding: 3px 6px; font: 9px ui-monospace, monospace; }
+    pre { max-height: 360px; margin: 10px 0 0; overflow: auto; border: 1px solid var(--border); background: var(--workbench); padding: 11px; color: var(--foreground); font: 10px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+    .error { color: var(--destructive); }
+    .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); padding: 10px 16px; color: var(--muted-foreground); font-size: 9px; }
+
+    @media (max-width: 900px) {
+      .meta-band { grid-template-columns: 1fr 1fr; }
+      .meta-cell:nth-child(2) { border-right: 0; }
+      .meta-cell:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+      .summary-band { grid-template-columns: 1fr; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--border); }
+      .metric:last-child { border-bottom: 0; }
+      .evidence { grid-template-columns: 1fr; }
+      .evidence-section:first-child { border-right: 0; border-bottom: 1px solid var(--border); }
+    }
+
+    @media (max-width: 560px) {
+      .shell { border-inline: 0; }
+      .topbar { padding: 10px 12px; }
+      .generated { width: 100%; padding-left: 48px; }
+      .meta-band { grid-template-columns: 1fr; }
+      .meta-cell { border-right: 0; border-bottom: 1px solid var(--border); }
+      .meta-cell:last-child { border-bottom: 0; }
+      .charts { padding: 10px; }
+      dd { font-size: 15px; }
+    }
+
+    @media print {
+      body { background: var(--surface); }
+      .shell { width: 100%; border: 0; }
+      .charts { background: var(--surface); padding-inline: 0; }
+      .chart-panel, .timeline-scroll, pre { break-inside: avoid; }
+      .chart-panel { margin-bottom: 8px; }
     }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <section class="hero">
-      <div class="panel hero-main">
-        <div class="eyebrow">FIO Run Report</div>
-        <h1 id="title-line">运行报告</h1>
-        <p class="subtitle">该导出页会保留运行元数据、性能摘要、按时间范围切换的单位自适应图表，以及配置与错误上下文，便于离线共享和复盘。</p>
-        <div class="cards" id="overview"></div>
-      </div>
-      <aside class="panel hero-meta">
-        <div class="meta-grid" id="meta"></div>
-      </aside>
+  <main class="shell">
+    <header class="topbar">
+      <div class="mark">FIO</div>
+      <div class="title"><h1>FIO WebUI 性能报告</h1><p class="run-id" id="run-id"></p></div>
+      <span class="status" id="status"></span>
+      <span class="generated" id="generated"></span>
+    </header>
+
+    <section class="meta-band" id="meta-band"></section>
+
+    <section class="summary-band">
+      <div class="metric iops"><h2>IOPS</h2><dl id="iops-summary"></dl></div>
+      <div class="metric bw"><h2>带宽</h2><dl id="bw-summary"></dl></div>
+      <div class="metric latency"><h2>完成延迟</h2><dl id="lat-summary"></dl></div>
     </section>
 
-    <section class="panel section">
-      <div class="section-head">
-        <div>
-          <h2>性能走势</h2>
-          <p>统一使用 tail-relative 时间范围和自适应单位，避免不同页面口径不一致。</p>
-        </div>
-        <div class="toolbar">
-          <button data-metric="iops">IOPS</button>
-          <button data-metric="bw">带宽</button>
-          <button data-metric="lat">延迟</button>
-          <select id="timeRange">
-            <option value="all">全部</option>
-            <option value="15m">最后 15 分钟</option>
-            <option value="1h">最后 1 小时</option>
-            <option value="6h">最后 6 小时</option>
-            <option value="24h">最后 24 小时</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="metric-strip" id="metric-strip"></div>
-
-      <div class="chart-wrap">
-        <div class="chart-meta">
-          <span id="chart-unit"></span>
-          <span id="chart-points"></span>
-        </div>
-        <canvas id="chart" width="1120" height="400"></canvas>
-      </div>
+    <section class="timeline-section">
+      <h2 class="section-title">节点时间带</h2>
+      <p class="section-note">图中的竖线标记每个节点在 fio task 日志时间轴上的起点。</p>
+      <div class="timeline-scroll"><div class="timeline" id="timeline"></div></div>
     </section>
 
-    <section class="grid-2">
-      <div class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>运行配置</h2>
-            <p>保留完整 task list / workflow 配置，便于复现实验。</p>
-          </div>
-        </div>
+    <section class="charts">
+      <article class="chart-panel">
+        <header class="chart-head"><h2>IOPS</h2><span class="chart-stats" id="iops-stats"></span></header>
+        <div class="chart" id="iops-chart"></div>
+      </article>
+      <article class="chart-panel">
+        <header class="chart-head"><h2>带宽</h2><span class="chart-stats" id="bw-stats"></span></header>
+        <div class="chart" id="bw-chart"></div>
+      </article>
+      <article class="chart-panel">
+        <header class="chart-head"><h2>完成延迟</h2><span class="chart-stats" id="lat-stats"></span></header>
+        <div class="chart" id="lat-chart"></div>
+      </article>
+    </section>
+
+    <section class="evidence">
+      <div class="evidence-section">
+        <h2 class="section-title">日志来源与错误</h2>
+        <p class="section-note" id="source-note"></p>
+        <div class="file-list" id="file-list"></div>
+        <pre class="error" id="errors"></pre>
+      </div>
+      <div class="evidence-section">
+        <h2 class="section-title">可复现配置</h2>
+        <p class="section-note">完整 task list、workflow 与编译元数据。</p>
         <pre id="config"></pre>
       </div>
-
-      <div class="panel section">
-        <div class="section-head">
-          <div>
-            <h2>日志与错误</h2>
-            <p>汇总最终日志摘要与运行时错误，便于快速定位异常。</p>
-          </div>
-        </div>
-        <div class="subpanel" style="margin-bottom: 14px;">
-          <h3>错误列表</h3>
-          <ul class="error-list" id="errors"></ul>
-        </div>
-        <div class="subpanel">
-          <h3>日志摘要</h3>
-          <pre id="logSummary"></pre>
-        </div>
-      </div>
     </section>
-  </div>
 
+    <footer class="footer"><span>FIO WebUI · persisted performance evidence</span><span id="sample-note"></span></footer>
+  </main>
+
+  <script>__UPLOT_JS__</script>
   <script>
     const report = JSON.parse("__REPORT_DATA__");
-    let metric = (report.view && report.view.metric) || 'iops';
-    let timeRange = (report.view && report.view.time_range) || 'all';
+    const generatedEpoch = Number("__REPORT_GENERATED_AT__") * 1000;
+    const colors = { primary: '#157a5b', live: '#0b8198', warning: '#c56b05', destructive: '#b83232', graphite: '#29323d', grid: '#d7dde2', muted: '#65707c' };
+    const plots = [];
 
-    const formatTime = (sec) => {
-      const total = Math.max(0, Math.floor(sec));
-      const h = Math.floor(total / 3600);
-      const m = Math.floor((total % 3600) / 60);
-      const s = total % 60;
-      if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-      return `${m}:${String(s).padStart(2, '0')}`;
-    };
-
+    const text = (id, value) => { document.getElementById(id).textContent = value; };
     const compact = (value) => {
-      const abs = Math.abs(value);
-      if (abs >= 100) return value.toFixed(0);
-      if (abs >= 10) return value.toFixed(1);
-      return value.toFixed(2).replace(/\.?0+$/, '');
+      const number = Number(value) || 0;
+      if (Math.abs(number) >= 100) return number.toFixed(0);
+      if (Math.abs(number) >= 10) return number.toFixed(1);
+      return number.toFixed(3).replace(/\.?0+$/, '');
+    };
+    const duration = (seconds) => {
+      const total = Math.max(0, Math.round(Number(seconds) || 0));
+      const minutes = Math.floor(total / 60);
+      const remainder = total % 60;
+      return minutes ? `${minutes}m ${String(remainder).padStart(2, '0')}s` : `${remainder}s`;
+    };
+    const metricDescriptor = (type, values) => {
+      const max = Math.max(0, ...values);
+      if (type === 'bw') return max >= 1024 ? { unit: 'GiB/s', transform: (value) => value / 1024 } : { unit: 'MiB/s', transform: (value) => value };
+      if (type === 'lat') {
+        if (max >= 1000) return { unit: 's', transform: (value) => value / 1000 };
+        if (max > 0 && max < 1) return { unit: 'us', transform: (value) => value * 1000 };
+        return { unit: 'ms', transform: (value) => value };
+      }
+      if (max >= 1000000) return { unit: 'MIOPS', transform: (value) => value / 1000000 };
+      if (max >= 1000) return { unit: 'KIOPS', transform: (value) => value / 1000 };
+      return { unit: 'IOPS', transform: (value) => value };
+    };
+    const metricValue = (type, value) => {
+      const descriptor = metricDescriptor(type, [value]);
+      return `${compact(descriptor.transform(Number(value) || 0))} ${descriptor.unit}`;
+    };
+    const elapsedTick = (value, span) => {
+      const decimals = span <= 1 ? 2 : span <= 10 ? 1 : 0;
+      return `${Number(value).toFixed(decimals).replace(/\.0+$/, '')}s`;
+    };
+    const appendDefinition = (root, label, value, className) => {
+      const wrapper = document.createElement('div');
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = label;
+      detail.textContent = value;
+      if (className) detail.className = className;
+      wrapper.append(term, detail);
+      root.append(wrapper);
     };
 
-    const filterByRange = (items) => {
-      if (timeRange === 'all' || !items.length) return items;
-      const tail = items[items.length - 1].time;
-      const ranges = { '15m': 900, '1h': 3600, '6h': 21600, '24h': 86400 };
-      const threshold = tail - (ranges[timeRange] || 0);
-      return items.filter((item) => item.time >= threshold);
-    };
+    function renderHeader() {
+      text('run-id', report.meta && report.meta.id ? report.meta.id : 'unknown run');
+      const status = document.getElementById('status');
+      status.textContent = report.meta && report.meta.status ? report.meta.status : 'unknown';
+      status.classList.add((report.meta && report.meta.status) || 'unknown');
+      text('generated', `生成 ${new Date(generatedEpoch).toLocaleString()}`);
 
-    const describeMetric = (metricKey, items) => {
-      const values = items.map((item) => {
-        if (metricKey === 'bw') return item.bw || 0;
-        if (metricKey === 'lat') return item.latMean || 0;
-        return item.iops || 0;
+      const source = report.source || {};
+      const sourceLabel = source.kind === 'fio-task-logs'
+        ? `fio task logs · ${String(source.latency_mode || 'latency unavailable').replaceAll('-', ' ')}`
+        : 'stats.jsonl · compatibility fallback';
+      const cells = [
+        ['数据来源', sourceLabel, `${(source.files || []).length} files · ${source.sample_interval_ms || '-'} ms window`],
+        ['运行窗口', duration(report.summary && report.summary.duration_seconds), `${report.summary && report.summary.sample_count || 0} samples`],
+        ['开始时间', report.meta && report.meta.start_time || '-', report.meta && report.meta.end_time ? `结束 ${report.meta.end_time}` : '未记录结束时间'],
+        ['存储占用', `${report.meta && report.meta.disk_bytes || 0} bytes`, `${(report.stages || []).length} 个节点`],
+      ];
+      const band = document.getElementById('meta-band');
+      cells.forEach(([label, value, note]) => {
+        const cell = document.createElement('div');
+        cell.className = 'meta-cell';
+        const labelEl = document.createElement('span');
+        labelEl.className = 'label';
+        labelEl.textContent = label;
+        const valueEl = document.createElement('div');
+        valueEl.className = 'value';
+        valueEl.textContent = value;
+        const noteEl = document.createElement('div');
+        noteEl.className = 'note';
+        noteEl.textContent = note;
+        cell.append(labelEl, valueEl, noteEl);
+        band.append(cell);
       });
-      const max = values.reduce((peak, value) => Math.max(peak, value), 0);
-
-      if (metricKey === 'bw') {
-        if (max >= 1024) {
-          return {
-            label: '带宽',
-            unit: 'GiB/s',
-            transform: (value) => value / 1024,
-            getValue: (item) => item.bw || 0,
-          };
-        }
-        return {
-          label: '带宽',
-          unit: 'MiB/s',
-          transform: (value) => value,
-          getValue: (item) => item.bw || 0,
-        };
-      }
-
-      if (metricKey === 'lat') {
-        if (max >= 1000) {
-          return {
-            label: '延迟',
-            unit: 's',
-            transform: (value) => value / 1000,
-            getValue: (item) => item.latMean || 0,
-          };
-        }
-        if (max > 0 && max < 1) {
-          return {
-            label: '延迟',
-            unit: 'us',
-            transform: (value) => value * 1000,
-            getValue: (item) => item.latMean || 0,
-          };
-        }
-        return {
-          label: '延迟',
-          unit: 'ms',
-          transform: (value) => value,
-          getValue: (item) => item.latMean || 0,
-        };
-      }
-
-      if (max >= 1000000) {
-        return {
-          label: 'IOPS',
-          unit: 'MIOPS',
-          transform: (value) => value / 1000000,
-          getValue: (item) => item.iops || 0,
-        };
-      }
-      if (max >= 1000) {
-        return {
-          label: 'IOPS',
-          unit: 'KIOPS',
-          transform: (value) => value / 1000,
-          getValue: (item) => item.iops || 0,
-        };
-      }
-      return {
-        label: 'IOPS',
-        unit: 'IOPS',
-        transform: (value) => value,
-        getValue: (item) => item.iops || 0,
-      };
-    };
-
-    const formatMetricValue = (descriptor, rawValue) => `${compact(descriptor.transform(rawValue))} ${descriptor.unit}`;
-
-    function renderMeta() {
-      document.getElementById('title-line').textContent = `运行报告 · ${(report.meta && report.meta.id) || 'unknown'}`;
-      const meta = [
-        ['Run ID', report.meta && report.meta.id || '-'],
-        ['状态', report.meta && report.meta.status || '-'],
-        ['开始时间', report.meta && report.meta.start_time || '-'],
-        ['结束时间', report.meta && report.meta.end_time || '-'],
-        ['导出时间', report.exported_at || '-'],
-        ['报告视图', `${metric.toUpperCase()} / ${timeRange}`],
-      ];
-      document.getElementById('meta').innerHTML = meta.map(([label, value]) => `
-        <div class="meta-item">
-          <span class="meta-label">${label}</span>
-          <div class="meta-value">${value}</div>
-        </div>
-      `).join('');
     }
 
-    function renderOverview() {
+    function renderSummary() {
       const summary = report.summary || {};
-      const metaSummary = report.meta && report.meta.summary || {};
-      const cards = [
-        ['采样点', String(summary.sample_count || 0), 'stats.jsonl 中可用点位'],
-        ['持续时间', formatTime(summary.duration_seconds || 0), '基于首尾采样点计算'],
-        ['峰值 IOPS', compact(summary.peak_iops || 0), metaSummary.iops ? `最终摘要 ${compact(metaSummary.iops)}` : '取历史峰值'],
-        ['峰值带宽', summary.peak_bandwidth_mib >= 1024 ? `${compact((summary.peak_bandwidth_mib || 0) / 1024)} GiB/s` : `${compact(summary.peak_bandwidth_mib || 0)} MiB/s`, metaSummary.bw ? `最终摘要 ${compact(metaSummary.bw)} MiB/s` : '取历史峰值'],
-        ['峰值延迟', (summary.peak_latency_ms || 0) >= 1000 ? `${compact((summary.peak_latency_ms || 0) / 1000)} s` : (summary.peak_latency_ms || 0) < 1 && (summary.peak_latency_ms || 0) > 0 ? `${compact((summary.peak_latency_ms || 0) * 1000)} us` : `${compact(summary.peak_latency_ms || 0)} ms`, metaSummary.lat_mean ? `最终均值 ${compact(metaSummary.lat_mean)} ms` : '取历史峰值'],
-        ['错误数量', String((report.errors || []).length), (report.errors || []).length ? '请结合日志摘要查看' : '本次导出未发现错误'],
-      ];
-      document.getElementById('overview').innerHTML = cards.map(([label, value, note]) => `
-        <div class="stat">
-          <div class="stat-label">${label}</div>
-          <div class="stat-value">${value}</div>
-          <div class="stat-note">${note}</div>
-        </div>
-      `).join('');
+      appendDefinition(document.getElementById('iops-summary'), 'MEAN', metricValue('iops', summary.mean_iops));
+      appendDefinition(document.getElementById('iops-summary'), 'MAX', metricValue('iops', summary.peak_iops));
+      appendDefinition(document.getElementById('bw-summary'), 'MEAN', metricValue('bw', summary.mean_bandwidth_mib));
+      appendDefinition(document.getElementById('bw-summary'), 'MAX', metricValue('bw', summary.peak_bandwidth_mib));
+      appendDefinition(document.getElementById('lat-summary'), 'MEAN', metricValue('lat', summary.mean_latency_ms));
+      appendDefinition(document.getElementById('lat-summary'), 'P99', metricValue('lat', summary.p99_latency_ms), 'p99');
+      appendDefinition(document.getElementById('lat-summary'), 'MAX', metricValue('lat', summary.peak_latency_ms), 'max');
+      text('iops-stats', `MEAN ${metricValue('iops', summary.mean_iops)} · MAX ${metricValue('iops', summary.peak_iops)}`);
+      text('bw-stats', `MEAN ${metricValue('bw', summary.mean_bandwidth_mib)} · MAX ${metricValue('bw', summary.peak_bandwidth_mib)}`);
+      text('lat-stats', `MEAN ${metricValue('lat', summary.mean_latency_ms)} · P99 ${metricValue('lat', summary.p99_latency_ms)} · MAX ${metricValue('lat', summary.peak_latency_ms)}`);
     }
 
-    function renderMetricStrip(filtered, descriptor) {
-      const values = filtered.map((item) => descriptor.getValue(item));
-      const current = values[values.length - 1] || 0;
-      const peak = values.reduce((acc, value) => Math.max(acc, value), 0);
-      const mean = values.length ? values.reduce((acc, value) => acc + value, 0) / values.length : 0;
-      document.getElementById('metric-strip').innerHTML = [
-        ['当前值', formatMetricValue(descriptor, current)],
-        ['峰值', formatMetricValue(descriptor, peak)],
-        ['均值', formatMetricValue(descriptor, mean)],
-      ].map(([label, value]) => `
-        <div class="metric-card">
-          <span>${label}</span>
-          <strong>${value}</strong>
-        </div>
-      `).join('');
+    function renderTimeline() {
+      const stages = report.stages || [];
+      const total = Math.max(1, stages.length ? stages[stages.length - 1].end_seconds : 1);
+      const timeline = document.getElementById('timeline');
+      stages.forEach((stage) => {
+        const node = document.createElement('div');
+        node.className = 'stage';
+        node.style.flexGrow = String(Math.max(0.05, (stage.end_seconds - stage.start_seconds) / total));
+        const op = document.createElement('span');
+        op.className = 'stage-op';
+        op.textContent = `OP ${String(stage.index + 1).padStart(2, '0')} · ${stage.start_seconds.toFixed(1)}s`;
+        const name = document.createElement('strong');
+        name.className = 'stage-name';
+        name.textContent = stage.name;
+        const meta = document.createElement('small');
+        meta.className = 'stage-meta';
+        meta.textContent = `${stage.job_count} Job · ${duration(stage.end_seconds - stage.start_seconds)}`;
+        node.append(op, name, meta);
+        timeline.append(node);
+      });
     }
 
-    function drawChart(filtered, descriptor) {
-      const canvas = document.getElementById('chart');
-      const ctx = canvas.getContext('2d');
-      const width = canvas.width;
-      const height = canvas.height;
-      ctx.clearRect(0, 0, width, height);
+    function stagePlugin() {
+      return { hooks: { draw: [(plot) => {
+        const { ctx, bbox } = plot;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.left, bbox.top, bbox.width, bbox.height);
+        ctx.clip();
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(41, 50, 61, 0.42)';
+        ctx.fillStyle = colors.graphite;
+        ctx.font = '600 9px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        (report.stages || []).forEach((stage) => {
+          const x = Math.round(plot.valToPos(stage.start_seconds, 'x', true)) + 0.5;
+          if (x < bbox.left || x > bbox.left + bbox.width) return;
+          ctx.beginPath();
+          ctx.moveTo(x, bbox.top);
+          ctx.lineTo(x, bbox.top + bbox.height);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const labelX = Math.max(x + 5, bbox.left + 8);
+          ctx.fillText(`OP ${String(stage.index + 1).padStart(2, '0')}`, labelX, bbox.top + 12);
+          ctx.setLineDash([4, 4]);
+        });
+        ctx.restore();
+      }] } };
+    }
 
-      document.getElementById('chart-unit').textContent = `${descriptor.label} · ${descriptor.unit}`;
-      document.getElementById('chart-points').textContent = `${filtered.length} points`;
-
-      if (!filtered.length) {
-        ctx.fillStyle = '#5d6b85';
-        ctx.font = '14px sans-serif';
-        ctx.fillText('当前时间范围内暂无数据', 42, 48);
+    function createChart(type, elementId) {
+      const root = document.getElementById(elementId);
+      const points = report.series || [];
+      if (!points.length || typeof uPlot === 'undefined') {
+        root.className += ' empty-chart';
+        root.textContent = '没有可绘制的 fio task 日志。';
         return;
       }
+      const definitions = type === 'lat'
+        ? [
+            ['Mean', colors.primary, points.map((point) => point.latMean || 0)],
+            ['P99', colors.warning, points.map((point) => point.latP99 || 0)],
+            ['Max', colors.destructive, points.map((point) => point.latMax || 0)],
+          ]
+        : [
+            ['Total', colors.graphite, points.map((point) => type === 'iops' ? point.iops || 0 : point.bw || 0)],
+            ['Read', colors.live, points.map((point) => type === 'iops' ? point.iopsRead || 0 : point.bwRead || 0)],
+            ['Write', colors.warning, points.map((point) => type === 'iops' ? point.iopsWrite || 0 : point.bwWrite || 0)],
+          ];
+      const descriptor = metricDescriptor(type, definitions.flatMap((definition) => definition[2]));
+      const times = points.map((point) => point.time);
+      const aligned = [times, ...definitions.map((definition) => definition[2].map(descriptor.transform))];
+      const maxX = Math.max(1, times[times.length - 1] || 1);
+      const options = {
+        width: Math.max(320, root.clientWidth - 16),
+        height: 280,
+        padding: [8, 10, 0, 0],
+        series: [
+          { label: 'Elapsed' },
+          ...definitions.map((definition) => ({
+            label: `${definition[0]} (${descriptor.unit})`,
+            stroke: definition[1],
+            width: definition[0] === 'Total' ? 2 : 1.5,
+            value: (_plot, value) => value == null ? '-' : `${compact(value)} ${descriptor.unit}`,
+          })),
+        ],
+        axes: [
+          { stroke: colors.muted, grid: { show: true, stroke: colors.grid, width: 1 }, values: (plot, splits) => {
+            const span = Number(plot.scales.x.max || maxX) - Number(plot.scales.x.min || 0);
+            return splits.map((value) => elapsedTick(value, span));
+          }, size: 42 },
+          { label: descriptor.unit, labelSize: 18, stroke: colors.muted, grid: { show: true, stroke: colors.grid, width: 1 }, values: (_plot, splits) => splits.map((value) => Number(value).toFixed(Math.abs(Number(value)) >= 10 ? 0 : 2)), size: 58 },
+        ],
+        scales: { x: { min: 0, max: maxX, time: false }, y: { range: (_plot, _min, max) => [0, Math.max(1, max * 1.08)] } },
+        cursor: { drag: { x: true, y: false, setScale: true }, focus: { prox: 24 } },
+        legend: { show: true, live: true },
+        plugins: [stagePlugin()],
+      };
+      plots.push(new uPlot(options, aligned, root));
+    }
 
-      const pad = { top: 20, right: 20, bottom: 48, left: 76 };
-      const innerWidth = width - pad.left - pad.right;
-      const innerHeight = height - pad.top - pad.bottom;
-      const startTime = filtered[0].time;
-      const endTime = filtered[filtered.length - 1].time;
-      const duration = Math.max(1, endTime - startTime);
-      const values = filtered.map((item) => descriptor.transform(descriptor.getValue(item)));
-      const max = values.reduce((peak, value) => Math.max(peak, value), 0);
-      const upper = max <= 0 ? 1 : max * 1.12;
-
-      ctx.strokeStyle = '#d8deea';
-      ctx.fillStyle = '#5d6b85';
-      ctx.lineWidth = 1;
-      ctx.font = '12px sans-serif';
-
-      for (let i = 0; i <= 4; i += 1) {
-        const y = pad.top + (innerHeight * i) / 4;
-        const value = upper - (upper * i) / 4;
-        ctx.beginPath();
-        ctx.moveTo(pad.left, y);
-        ctx.lineTo(width - pad.right, y);
-        ctx.stroke();
-        ctx.fillText(compact(value), 12, y + 4);
-      }
-
-      for (let i = 0; i <= 4; i += 1) {
-        const x = pad.left + (innerWidth * i) / 4;
-        const elapsed = (duration * i) / 4;
-        ctx.beginPath();
-        ctx.moveTo(x, pad.top);
-        ctx.lineTo(x, height - pad.bottom);
-        ctx.stroke();
-        ctx.fillText(formatTime(elapsed), x - 14, height - 18);
-      }
-
-      const gradient = ctx.createLinearGradient(0, pad.top, 0, height - pad.bottom);
-      gradient.addColorStop(0, 'rgba(37, 83, 214, 0.22)');
-      gradient.addColorStop(1, 'rgba(37, 83, 214, 0.02)');
-
-      ctx.beginPath();
-      filtered.forEach((item, index) => {
-        const x = pad.left + ((item.time - startTime) / duration) * innerWidth;
-        const y = pad.top + innerHeight - (descriptor.transform(descriptor.getValue(item)) / upper) * innerHeight;
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+    function renderEvidence() {
+      const source = report.source || {};
+      text('source-note', source.kind === 'fio-task-logs' ? `fio task logs · ${source.latency_mode || 'latency unavailable'}` : 'stats.jsonl compatibility fallback');
+      const fileList = document.getElementById('file-list');
+      (source.files || []).forEach((file) => {
+        const item = document.createElement('span');
+        item.className = 'file';
+        item.textContent = file;
+        fileList.append(item);
       });
-
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#2553d6';
-      ctx.stroke();
-
-      ctx.lineTo(width - pad.right, height - pad.bottom);
-      ctx.lineTo(pad.left, height - pad.bottom);
-      ctx.closePath();
-      ctx.fillStyle = gradient;
-      ctx.fill();
+      text('errors', (report.errors || []).length ? report.errors.join('\n') : '未记录到运行错误。');
+      text('config', JSON.stringify(report.config || {}, null, 2));
+      text('sample-note', `${report.summary && report.summary.sample_count || 0} samples · ${(report.stages || []).length} nodes`);
     }
 
-    function renderConfig() {
-      document.getElementById('config').textContent = JSON.stringify(report.config || {}, null, 2);
-    }
+    renderHeader();
+    renderSummary();
+    renderTimeline();
+    renderEvidence();
+    createChart('iops', 'iops-chart');
+    createChart('bw', 'bw-chart');
+    createChart('lat', 'lat-chart');
 
-    function renderErrors() {
-      const errors = report.errors || [];
-      document.getElementById('errors').innerHTML = errors.length
-        ? errors.map((error) => `<li>${error}</li>`).join('')
-        : '<li class="empty">无</li>';
-      document.getElementById('logSummary').textContent = report.log_summary && report.log_summary.summary
-        ? report.log_summary.summary
-        : '无日志摘要';
-    }
-
-    function renderMetricView() {
-      const filtered = filterByRange(report.stats || []);
-      const descriptor = describeMetric(metric, filtered);
-      renderMetricStrip(filtered, descriptor);
-      drawChart(filtered, descriptor);
-    }
-
-    document.querySelectorAll('[data-metric]').forEach((button) => {
-      button.addEventListener('click', () => {
-        metric = button.getAttribute('data-metric');
-        document.querySelectorAll('[data-metric]').forEach((item) => item.classList.toggle('active', item === button));
-        renderMetricView();
+    const resizeObserver = new ResizeObserver(() => {
+      plots.forEach((plot) => {
+        const parent = plot.root.parentElement;
+        if (parent && parent.clientWidth > 0) plot.setSize({ width: Math.max(320, parent.clientWidth - 16), height: 280 });
       });
-      button.classList.toggle('active', button.getAttribute('data-metric') === metric);
     });
-
-    const rangeEl = document.getElementById('timeRange');
-    rangeEl.value = timeRange;
-    rangeEl.addEventListener('change', () => {
-      timeRange = rangeEl.value;
-      renderMetricView();
-    });
-
-    renderMeta();
-    renderOverview();
-    renderMetricView();
-    renderConfig();
-    renderErrors();
+    document.querySelectorAll('.chart').forEach((chart) => resizeObserver.observe(chart));
   </script>
 </body>
 </html>

@@ -57,7 +57,9 @@ func TestNewStaticHandlerFallsBackWithoutDist(t *testing.T) {
 	t.Parallel()
 
 	handler, err := newStaticHandler(fstest.MapFS{
-		"web/report-template/report.html": &fstest.MapFile{Data: []byte("report")},
+		"web/report-template/report.html":              &fstest.MapFile{Data: []byte("report")},
+		"web/report-template/vendor/uPlot.iife.min.js": &fstest.MapFile{Data: []byte("uplot-js")},
+		"web/report-template/vendor/uPlot.min.css":     &fstest.MapFile{Data: []byte("uplot-css")},
 	})
 	if err != nil {
 		t.Fatalf("newStaticHandler() error = %v", err)

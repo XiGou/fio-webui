@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, ArrowLeft, CircleStop, FileDown, Radio, RefreshCw, Server, Terminal, Timer, Wifi, WifiOff } from 'lucide-react'
+import { Activity, ArrowLeft, CircleStop, FileChartColumn, Radio, RefreshCw, Server, Terminal, Timer, Wifi, WifiOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StatsChart } from '@/components/StatsChart'
@@ -354,8 +354,6 @@ export function RealtimeMonitorPage() {
   const activeStatus = runDetail?.meta.status || selectedRun?.status || runState?.status || 'idle'
   const activeError = runDetail?.meta.error || (runState?.id === selectedRunId ? runState.error : '') || '-'
   const latest = visibleStatsData[visibleStatsData.length - 1]
-  const reportHref = selectedRunId ? `/api/runs/${selectedRunId}/report.html?metric=${statsTab}&timeRange=${timeRange}` : '#'
-
   return (
     <div className="min-h-full bg-background">
       <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-border px-4 py-2 lg:px-6">
@@ -366,7 +364,7 @@ export function RealtimeMonitorPage() {
         </div>
         <div className="flex items-center gap-2">
           <Badge tone={wsStatus === 'open' ? 'success' : wsStatus === 'connecting' ? 'warning' : 'neutral'}>{wsStatus === 'open' ? <Wifi className="mr-1 h-3 w-3" /> : <WifiOff className="mr-1 h-3 w-3" />}{wsStatus === 'open' ? 'LIVE' : wsStatus.toUpperCase()}</Badge>
-          {selectedRunId ? <Button variant="outline" asChild><a href={reportHref} download><FileDown />生成报告</a></Button> : <Button variant="outline" disabled><FileDown />生成报告</Button>}
+          <Button variant="outline" onClick={() => selectedRunId && navigate(`/history?runId=${selectedRunId}`)} disabled={!selectedRunId}><FileChartColumn />生成报告</Button>
           <Button variant="destructive" onClick={stop} disabled={!isSelectedRunning}><CircleStop />停止</Button>
         </div>
       </header>

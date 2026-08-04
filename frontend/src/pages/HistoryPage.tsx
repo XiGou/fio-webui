@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { FileChartColumn, History } from 'lucide-react'
 import { addUserPreset, buildConfigSummaryFromJobs } from '@/lib/userPresets'
 import { RunsListPanel } from '@/components/history/RunsListPanel'
 import { RunDetailPanel } from '@/components/history/RunDetailPanel'
-import { ArtifactsPanel } from '@/components/history/ArtifactsPanel'
-import type { LogSummary, StatsDataPoint } from '@/types/api'
+import type { RunReportDTO } from '@/types/api'
 import type { HistoryAction, HistoryFilterState, RunDetail, RunRecordExt } from '@/components/history/types'
 
 function formatBytes(bytes: number): string {
@@ -50,23 +49,14 @@ export function HistoryPage() {
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([])
-  const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
-  const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
+  const [report, setReport] = useState<RunReportDTO | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
-  const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
-  const [statsRange, setStatsRange] = useState<'all' | '15m' | '1h' | '6h' | '24h'>('all')
   const [filters, setFilters] = useState<HistoryFilterState>({ search: '', status: 'all', timeRange: 'all', tag: 'all', templateSource: 'all' })
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const autoOpenedRunRef = useRef('')
   const navigate = useNavigate()
-
-  const normalizeStatsPoint = useCallback((raw: unknown): StatsDataPoint | null => {
-    if (!raw || typeof raw !== 'object') return null
-    const r = raw as Record<string, unknown>
-    const time = Number(r.time)
-    if (!Number.isFinite(time) || time < 0) return null
-    const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)
-    return { time, iops: num(r.iops), iopsRead: num(r.iopsRead), iopsWrite: num(r.iopsWrite), bw: num(r.bw), bwRead: num(r.bwRead), bwWrite: num(r.bwWrite), latMean: num(r.latMean), latP95: num(r.latP95), latP99: num(r.latP99), latMax: num(r.latMax) }
-  }, [])
+  const [searchParams] = useSearchParams()
 
   const fetchRuns = useCallback(async () => {
     try {
@@ -83,11 +73,11 @@ export function HistoryPage() {
 
   const openDetail = useCallback(async (id: string) => {
     setSelectedRunId(id)
-    setLogSummary(null)
-    setStatsData([])
+    setReport(null)
+    setReportLoading(true)
     setDetailError('')
     try {
-      const [detailRes, statsRes] = await Promise.all([fetch(`/api/runs/${id}`), fetch(`/api/runs/${id}/stats`)])
+      const [detailRes, reportRes] = await Promise.all([fetch(`/api/runs/${id}`), fetch(`/api/runs/${id}/report-data`)])
       if (!detailRes.ok) {
         setDetail(null)
         setDetailError(`加载运行详情失败：${detailRes.status} ${detailRes.statusText || 'Request failed'}`)
@@ -95,19 +85,25 @@ export function HistoryPage() {
       }
       const data = (await detailRes.json()) as RunDetail
       setDetail(data)
-      if (statsRes.ok) {
-        const statsRaw = (await statsRes.json()) as unknown
-        if (Array.isArray(statsRaw)) {
-          setStatsData(statsRaw.map((x) => normalizeStatsPoint(x)).filter(Boolean) as StatsDataPoint[])
-        }
+      if (reportRes.ok) {
+        setReport((await reportRes.json()) as RunReportDTO)
       } else {
-        setStatsData([])
+        setDetailError(`生成报告失败：${reportRes.status} ${reportRes.statusText || 'Request failed'}`)
       }
     } catch {
       setDetail(null)
       setDetailError('加载运行详情失败：网络错误')
+    } finally {
+      setReportLoading(false)
     }
-  }, [normalizeStatsPoint])
+  }, [])
+
+  useEffect(() => {
+    const requestedRunId = searchParams.get('runId') ?? ''
+    if (!requestedRunId || autoOpenedRunRef.current === requestedRunId) return
+    autoOpenedRunRef.current = requestedRunId
+    openDetail(requestedRunId)
+  }, [openDetail, searchParams])
 
   useEffect(() => {
     fetchRuns()
@@ -132,17 +128,6 @@ export function HistoryPage() {
 
   const allTags = useMemo(() => Array.from(new Set(runs.flatMap((r) => r.tags ?? []))).sort(), [runs])
   const allTemplateSources = useMemo(() => Array.from(new Set(runs.map((r) => r.template_source ?? 'manual'))).sort(), [runs])
-
-  const fetchLogSummary = useCallback(async () => {
-    if (!detail) return
-    setDetailError('')
-    const res = await fetch(`/api/runs/${detail.meta.id}/log-summary`)
-    if (!res.ok) {
-      setDetailError(`加载日志摘要失败：${res.status} ${res.statusText || 'Request failed'}`)
-      return
-    }
-    setLogSummary((await res.json()) as LogSummary)
-  }, [detail])
 
   const restoreToWorkflow = useCallback(() => {
     if (!detail?.config?.tasks?.length) return
@@ -169,16 +154,15 @@ export function HistoryPage() {
 
   const exportReport = useCallback(async () => {
     if (!detail) return
-    const query = new URLSearchParams({ metric: statsTab, timeRange: statsRange }).toString()
-    const res = await fetch(`/api/runs/${detail.meta.id}/report.html?${query}`)
+    const res = await fetch(`/api/runs/${detail.meta.id}/report.html`)
     if (!res.ok) {
-      downloadJson(`run-${detail.meta.id}-report.json`, { meta: detail.meta, stats: statsData, logSummary, config: detail.config })
+      downloadJson(`run-${detail.meta.id}-report.json`, report ?? { meta: detail.meta, config: detail.config })
       return
     }
     const blob = await res.blob()
     const filename = getFileNameFromDisposition(res.headers.get('Content-Disposition'), `run-${detail.meta.id}-report.html`)
     downloadBlob(filename, blob)
-  }, [detail, logSummary, statsData, statsRange, statsTab])
+  }, [detail, report])
 
   const deleteRuns = useCallback(async (ids: string[]) => {
     if (!ids.length) return
@@ -244,7 +228,7 @@ export function HistoryPage() {
         <div className="flex items-center gap-2 border-l border-border pl-4 text-xs"><FileChartColumn className="h-4 w-4 text-primary" /><span><strong className="font-mono text-base">{runs.length}</strong><small className="ml-1 text-muted-foreground">runs</small></span></div>
       </header>
       <div className="grid grid-cols-1 xl:grid-cols-12">
-        <div className="xl:col-span-5">
+        <div className={`${selectedRunId ? 'order-2' : 'order-1'} xl:order-1 xl:col-span-4`}>
           <RunsListPanel
             searchInputRef={searchInputRef}
             runs={filteredRuns}
@@ -264,11 +248,8 @@ export function HistoryPage() {
             formatBytes={formatBytes}
           />
         </div>
-        <div className="border-t border-border xl:col-span-4 xl:border-l xl:border-t-0">
-          <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} statsRange={statsRange} detailError={detailError} onStatsTabChange={setStatsTab} onStatsRangeChange={setStatsRange} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
-        </div>
-        <div className="border-t border-border xl:col-span-3 xl:border-l xl:border-t-0">
-          <ArtifactsPanel detail={detail} logSummary={logSummary} detailError={detailError} onFetchLogSummary={fetchLogSummary} onExportReport={exportReport} />
+        <div className={`${selectedRunId ? 'order-1' : 'order-2'} border-t border-border xl:order-2 xl:col-span-8 xl:border-l xl:border-t-0`}>
+          <RunDetailPanel key={selectedRunId ?? 'empty'} detail={detail} report={report} loading={reportLoading} detailError={detailError} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
         </div>
       </div>
     </div>

@@ -165,6 +165,12 @@
 .inspector-tab.is-active { color: hsl(var(--primary)); }
 .inspector-tab.is-active::after { position: absolute; right: 16px; bottom: -1px; left: 16px; height: 2px; content: ''; background: hsl(var(--primary)); }
 
+.report-chart .u-wrap { font-family: "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif; }
+.report-chart .u-legend { margin: 0 4px 4px 62px; text-align: left; font-size: 10px; color: hsl(var(--muted-foreground)); }
+.report-chart .u-legend .u-series { display: inline-flex; width: auto; align-items: center; margin-right: 14px; }
+.report-chart .u-legend .u-label { font-size: 10px; }
+.report-chart .u-legend .u-value { min-width: 62px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: hsl(var(--foreground)); }
+
 @media (max-width: 1279px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 56px minmax(0, 1fr); }
   .app-rail { flex-direction: row; border-right: 0; border-bottom: 1px solid hsl(var(--border)); }

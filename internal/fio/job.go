@@ -39,19 +39,19 @@ type GlobalConfig struct {
 }
 
 type JobConfig struct {
-	Name           string `json:"name"`
-	Filename       string `json:"filename"`
-	RW             RWType `json:"rw"`
-	BS             string `json:"bs"`
-	Size           string `json:"size"`
-	NumJobs        int    `json:"numjobs"`
-	IODepth        int    `json:"iodepth"`
-	RWMixRead      int    `json:"rwmixread"`
-	Rate           string `json:"rate,omitempty"`
-	StonewallAfter bool   `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
-	Runtime        int    `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
-	IOEngine       string `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
-	NodeID         string `json:"nodeId,omitempty"`         // Source workflow node ID for traceability
+	Name           string         `json:"name"`
+	Filename       string         `json:"filename"`
+	RW             RWType         `json:"rw"`
+	BS             string         `json:"bs"`
+	Size           string         `json:"size"`
+	NumJobs        int            `json:"numjobs"`
+	IODepth        int            `json:"iodepth"`
+	RWMixRead      int            `json:"rwmixread"`
+	Rate           string         `json:"rate,omitempty"`
+	StonewallAfter bool           `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
+	Runtime        int            `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
+	IOEngine       string         `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
+	NodeID         string         `json:"nodeId,omitempty"`         // Source workflow node ID for traceability
 	ExtraOptions   map[string]any `json:"extra_options,omitempty"`
 }
 
@@ -122,13 +122,16 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 		sb.WriteString(fmt.Sprintf("log_avg_msec=%d\n", c.Global.LogAvgMsec))
 	}
 	// output-format 与 status-interval 为 fio 命令行参数，见 executor.runFio
-	// Enable real-time log output with aggressive flushing
-	sb.WriteString("log_hist_msec=200\n")
-	sb.WriteString("log_max_value=1\n")
 	if logPrefix != "" {
+		histInterval := c.Global.LogAvgMsec
+		if histInterval <= 0 {
+			histInterval = 500
+		}
+		sb.WriteString(fmt.Sprintf("log_hist_msec=%d\n", histInterval))
 		sb.WriteString(fmt.Sprintf("write_bw_log=%s\n", logPrefix))
 		sb.WriteString(fmt.Sprintf("write_iops_log=%s\n", logPrefix))
 		sb.WriteString(fmt.Sprintf("write_lat_log=%s\n", logPrefix))
+		sb.WriteString(fmt.Sprintf("write_hist_log=%s\n", logPrefix))
 		sb.WriteString("per_job_logs=0\n")
 	}
 

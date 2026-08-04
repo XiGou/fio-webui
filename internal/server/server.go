@@ -29,6 +29,8 @@ type Server struct {
 	debug         bool
 	dataDir       string
 	reportTpl     string
+	uPlotJS       string
+	uPlotCSS      string
 	shutdownCh    chan struct{}
 }
 
@@ -60,6 +62,14 @@ func New(addr string, webFS fs.FS, debug bool, dataDir string) (*Server, error) 
 	if err != nil {
 		return nil, err
 	}
+	uPlotJS, err := fs.ReadFile(webFS, "web/report-template/vendor/uPlot.iife.min.js")
+	if err != nil {
+		return nil, err
+	}
+	uPlotCSS, err := fs.ReadFile(webFS, "web/report-template/vendor/uPlot.min.css")
+	if err != nil {
+		return nil, err
+	}
 	return &Server{
 		executor:      exec,
 		runStore:      store,
@@ -69,6 +79,8 @@ func New(addr string, webFS fs.FS, debug bool, dataDir string) (*Server, error) 
 		debug:         debug,
 		dataDir:       dataDir,
 		reportTpl:     string(reportTplBytes),
+		uPlotJS:       string(uPlotJS),
+		uPlotCSS:      string(uPlotCSS),
 		shutdownCh:    make(chan struct{}),
 	}, nil
 }
