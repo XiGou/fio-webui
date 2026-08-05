@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import { getVisibleYDomain } from '@/lib/chartRanges'
+import { buildReportMetricSeries, type LatencyStatistic, type MetricDirection, type MetricJobOption } from '@/lib/metricSeries'
 import { describeMetricPresentation } from '@/lib/statsFormat'
-import type { ReportSeriesPoint, ReportStageBoundary } from '@/types/api'
+import type { ReportJobSeries, ReportSeriesPoint, ReportStageBoundary } from '@/types/api'
 
 type ReportMetric = 'iops' | 'bw' | 'lat'
 
@@ -14,6 +15,11 @@ type ReportMetricChartProps = {
   height?: number
   xDomain: { min: number; max: number } | null
   onDomainChange: (domain: { min: number; max: number }) => void
+  jobSeries: ReportJobSeries[]
+  jobs: MetricJobOption[]
+  selectedJobKeys: string[]
+  directions: MetricDirection[]
+  latencyStatistics: LatencyStatistic[]
 }
 
 const palette = {
@@ -95,7 +101,7 @@ function formatElapsedTick(value: number, span: number): string {
   return `${value.toFixed(decimals).replace(/\.0+$/, '')}s`
 }
 
-export function ReportMetricChart({ data, stages, type, height = 260, xDomain, onDomainChange }: ReportMetricChartProps) {
+export function ReportMetricChart({ data, stages, type, height = 260, xDomain, onDomainChange, jobSeries, jobs, selectedJobKeys, directions, latencyStatistics }: ReportMetricChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const plotRef = useRef<uPlot | null>(null)
   const domainCallbackRef = useRef(onDomainChange)
@@ -116,26 +122,16 @@ export function ReportMetricChart({ data, stages, type, height = 260, xDomain, o
   }, [])
 
   const prepared = useMemo(() => {
-    const times = data.map((point) => point.time)
-    const definitions = type === 'lat'
-      ? [
-          { label: 'Mean', color: palette.primary, values: data.map((point) => point.latMean) },
-          { label: 'P99', color: palette.warning, values: data.map((point) => point.latP99) },
-          { label: 'Max', color: palette.destructive, values: data.map((point) => point.latMax) },
-        ]
-      : [
-          { label: 'Total', color: palette.graphite, values: data.map((point) => type === 'iops' ? point.iops : point.bw) },
-          { label: 'Read', color: palette.live, values: data.map((point) => type === 'iops' ? point.iopsRead : point.bwRead) },
-          { label: 'Write', color: palette.warning, values: data.map((point) => type === 'iops' ? point.iopsWrite : point.bwWrite) },
-        ]
-    const presentation = describeMetricPresentation(type, definitions.flatMap((definition) => definition.values))
+    const { times, definitions } = buildReportMetricSeries(data, jobSeries, type, jobs, selectedJobKeys, directions, latencyStatistics)
+    const numericValues = definitions.flatMap((definition) => definition.values.filter((value): value is number => value != null))
+    const presentation = describeMetricPresentation(type, numericValues)
     return {
       times,
       definitions,
       presentation,
-      plotData: [times, ...definitions.map((definition) => definition.values.map(presentation.transform))] as uPlot.AlignedData,
+      plotData: [times, ...definitions.map((definition) => definition.values.map((value) => value == null ? null : presentation.transform(value)))] as uPlot.AlignedData,
     }
-  }, [data, type])
+  }, [data, directions, jobSeries, jobs, latencyStatistics, selectedJobKeys, type])
 
   useEffect(() => {
     if (!containerRef.current || data.length === 0) return
@@ -151,7 +147,8 @@ export function ReportMetricChart({ data, stages, type, height = 260, xDomain, o
         ...prepared.definitions.map((definition) => ({
           label: `${definition.label} (${prepared.presentation.unit})`,
           stroke: definition.color,
-          width: definition.label === 'Total' ? 2 : 1.5,
+          width: definition.width,
+          dash: definition.dash,
           value: (_plot: uPlot, value: number | null) => value == null ? '-' : `${value.toFixed(Math.abs(value) >= 10 ? 1 : 3)} ${prepared.presentation.unit}`,
         })),
       ],

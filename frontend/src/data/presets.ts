@@ -30,7 +30,7 @@ const defaultGlobal = {
   direct: true,
   runtime: 60,
   time_based: true,
-  group_reporting: true,
+  group_reporting: false,
   log_avg_msec: 500,
   output_format: 'json' as const,
   status_interval: 1,
@@ -487,4 +487,3 @@ export const PRESETS: PresetWorkload[] = [
     },
   },
 ]
-

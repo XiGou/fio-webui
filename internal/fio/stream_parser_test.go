@@ -1,6 +1,9 @@
 package fio
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTextStatusBandwidthUnitsAndMergedDirections(t *testing.T) {
 	parser := NewStreamJSONParser(nil)
@@ -45,5 +48,31 @@ func TestRawJSONBandwidthIsNormalizedFromKiB(t *testing.T) {
 	point := StatusToStatsDataPoint(status)
 	if point.BWRead != 128 || point.BWWrite != 64 || point.BW != 192 {
 		t.Fatalf("BW total/read/write = %.2f/%.2f/%.2f MiB/s, want 192/128/64", point.BW, point.BWRead, point.BWWrite)
+	}
+}
+
+func TestStreamJSONParser_PreservesJobsFromPrettyStatusWithStringTime(t *testing.T) {
+	payload := `{
+  "timestamp": 1700000000,
+  "timestamp_ms": 1700000000123,
+  "time": "Tue Nov 14 22:13:20 2023",
+  "jobs": [
+    {"jobname":"reader","groupid":0,"read":{"iops":100,"bw":1024},"write":{"iops":0,"bw":0}},
+    {"jobname":"writer","groupid":0,"read":{"iops":0,"bw":0},"write":{"iops":50,"bw":2048}}
+  ]
+}`
+	parser := NewStreamJSONParser(strings.NewReader(payload))
+	parser.Start()
+
+	var statuses []*StatusUpdate
+	for status := range parser.StatusChan() {
+		statuses = append(statuses, status)
+	}
+	if len(statuses) != 1 || len(statuses[0].Jobs) != 2 {
+		t.Fatalf("unexpected statuses: %#v", statuses)
+	}
+	point := StatusToStatsDataPoint(statuses[0])
+	if len(point.Jobs) != 2 || point.IOPSRead != 100 || point.IOPSWrite != 50 {
+		t.Fatalf("unexpected per-job point: %#v", point)
 	}
 }

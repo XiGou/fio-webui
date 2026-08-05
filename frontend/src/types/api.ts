@@ -149,8 +149,33 @@ export interface LogSummary {
 }
 
 // Data point for charting
+export interface JobStatsDataPoint {
+  key: string
+  name: string
+  stageIndex: number
+  iops: number
+  iopsRead: number
+  iopsWrite: number
+  bw: number
+  bwRead: number
+  bwWrite: number
+  latMean: number
+  latP95: number
+  latP99: number
+  latMax: number
+  latMeanRead: number
+  latP95Read: number
+  latP99Read: number
+  latMaxRead: number
+  latMeanWrite: number
+  latP95Write: number
+  latP99Write: number
+  latMaxWrite: number
+}
+
 export interface StatsDataPoint {
   time: number // Unix timestamp (seconds)
+  stageIndex: number
   iops: number
   iopsRead: number
   iopsWrite: number
@@ -161,6 +186,15 @@ export interface StatsDataPoint {
   latP95: number // ms
   latP99: number // ms
   latMax: number // ms
+  latMeanRead: number
+  latP95Read: number
+  latP99Read: number
+  latMaxRead: number
+  latMeanWrite: number
+  latP95Write: number
+  latP99Write: number
+  latMaxWrite: number
+  jobs?: JobStatsDataPoint[]
 }
 
 export interface ReportSeriesPoint {
@@ -175,6 +209,22 @@ export interface ReportSeriesPoint {
   latMean: number // ms
   latP99: number
   latMax: number
+  latMeanRead: number
+  latP99Read: number
+  latMaxRead: number
+  latMeanWrite: number
+  latP99Write: number
+  latMaxWrite: number
+}
+
+export interface ReportJobSeries {
+  key: string
+  name: string
+  stage_index: number
+  stage_name: string
+  job_index: number
+  points: ReportSeriesPoint[]
+  summary: ReportSummary
 }
 
 export interface ReportStageBoundary {
@@ -197,11 +247,25 @@ export interface ReportSummary {
   duration_seconds: number
   mean_iops: number
   peak_iops: number
+  mean_iops_read: number
+  peak_iops_read: number
+  mean_iops_write: number
+  peak_iops_write: number
   mean_bandwidth_mib: number
   peak_bandwidth_mib: number
+  mean_bandwidth_read_mib: number
+  peak_bandwidth_read_mib: number
+  mean_bandwidth_write_mib: number
+  peak_bandwidth_write_mib: number
   mean_latency_ms: number
   p99_latency_ms: number
   peak_latency_ms: number
+  mean_latency_read_ms: number
+  p99_latency_read_ms: number
+  peak_latency_read_ms: number
+  mean_latency_write_ms: number
+  p99_latency_write_ms: number
+  peak_latency_write_ms: number
 }
 
 export interface RunReportDTO {
@@ -213,6 +277,7 @@ export interface RunReportDTO {
   }
   stats: StatsDataPoint[]
   series: ReportSeriesPoint[]
+  job_series: ReportJobSeries[]
   stages: ReportStageBoundary[]
   source: ReportDataSource
   summary: ReportSummary

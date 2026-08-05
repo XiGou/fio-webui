@@ -11,7 +11,7 @@ const DEFAULT_GLOBAL: GlobalConfig = {
   direct: true,
   runtime: 60,
   time_based: true,
-  group_reporting: true,
+  group_reporting: false,
   log_avg_msec: 500,
   status_interval: 1,
   output_format: 'json',

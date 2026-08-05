@@ -525,7 +525,7 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 	// aggregated metrics for historical queries.
 	go func(curRunID string) {
 		for status := range e.streamParser.StatusChan() {
-			if point := StatusToStatsDataPoint(status); point != nil {
+			if point := AssignStatsStage(StatusToStatsDataPoint(status), jobIndex); point != nil {
 				point = e.appendStatsPoint(curRunID, point)
 				select {
 				case e.statsCh <- point:

@@ -4,6 +4,7 @@ import type { StatsDataPoint } from '@/types/api'
 
 const point = (time: number, patch: Partial<StatsDataPoint> = {}): StatsDataPoint => ({
   time,
+  stageIndex: 0,
   iops: 0,
   iopsRead: 0,
   iopsWrite: 0,
@@ -14,6 +15,14 @@ const point = (time: number, patch: Partial<StatsDataPoint> = {}): StatsDataPoin
   latP95: 0,
   latP99: 0,
   latMax: 0,
+  latMeanRead: 0,
+  latP95Read: 0,
+  latP99Read: 0,
+  latMaxRead: 0,
+  latMeanWrite: 0,
+  latP95Write: 0,
+  latP99Write: 0,
+  latMaxWrite: 0,
   ...patch,
 })
 

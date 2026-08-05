@@ -1,3 +1,4 @@
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowLeft, ArrowRight, BarChart3, Check, CircleStop, Layers3, Plus, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -54,8 +55,46 @@ function JobModule({ stageId, job, selected, onSelect, onDelete }: {
 }
 
 export function PipelineCanvas({ stages, selectedStageId, selectedJobId, onSelectStage, onSelectJob, onAddStage, onAddJob, onDeleteStage, onDeleteJob, onMoveStage }: PipelineCanvasProps) {
+  const canvasRef = useRef<HTMLElement>(null)
+  const panRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null)
+  const [isPanning, setIsPanning] = useState(false)
+
+  const startPan = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || !(event.target instanceof Element)) return
+    if (event.target.closest('button, input, select, summary, [data-pipeline-node]')) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    panRef.current = { x: event.clientX, y: event.clientY, left: canvas.scrollLeft, top: canvas.scrollTop }
+    setIsPanning(true)
+    canvas.setPointerCapture(event.pointerId)
+    event.preventDefault()
+  }
+
+  const movePan = (event: ReactPointerEvent<HTMLElement>) => {
+    const start = panRef.current
+    const canvas = canvasRef.current
+    if (!start || !canvas) return
+    canvas.scrollLeft = start.left - (event.clientX - start.x)
+    canvas.scrollTop = start.top - (event.clientY - start.y)
+  }
+
+  const stopPan = (event: ReactPointerEvent<HTMLElement>) => {
+    if (!panRef.current) return
+    panRef.current = null
+    setIsPanning(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   return (
-    <section className="pipeline-canvas min-h-0 overflow-auto" aria-label="测试流水线画布">
+    <section
+      ref={canvasRef}
+      className={cn('pipeline-canvas min-h-0 overflow-auto', isPanning && 'is-panning')}
+      aria-label="测试流水线画布"
+      onPointerDown={startPan}
+      onPointerMove={movePan}
+      onPointerUp={stopPan}
+      onPointerCancel={stopPan}
+    >
       <div className="flex min-h-full min-w-max items-start px-8 py-12 lg:px-12">
         <div className="pipeline-terminal mt-24">
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-foreground text-background"><Check className="h-4 w-4" /></span>
@@ -66,7 +105,7 @@ export function PipelineCanvas({ stages, selectedStageId, selectedJobId, onSelec
         {stages.map((stage, index) => (
           <div className="flex items-start" key={stage.id}>
             <div className="pipeline-connector mt-[7.25rem]" aria-hidden="true"><span /></div>
-            <article className={cn('pipeline-stage w-[282px] shrink-0', selectedStageId === stage.id && 'is-selected')}>
+            <article data-pipeline-node className={cn('pipeline-stage w-[282px] shrink-0', selectedStageId === stage.id && 'is-selected')}>
               <header>
                 <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onSelectStage(stage.id)}>
                   <span className="text-[10px] font-semibold text-muted-foreground">OP {String(index + 1).padStart(2, '0')}</span>

@@ -4,6 +4,7 @@ import 'uplot/dist/uPlot.min.css'
 import type { StatsDataPoint } from '@/types/api'
 import { describeMetricPresentation } from '@/lib/statsFormat'
 import { getNormalizedTimeline, type ChartDomain } from '@/lib/chartRanges'
+import { buildLiveMetricSeries, type LatencyStatistic, type MetricDirection, type MetricJobOption } from '@/lib/metricSeries'
 
 interface StatsChartProps {
   data: StatsDataPoint[]
@@ -13,6 +14,10 @@ interface StatsChartProps {
   xDomain?: ChartDomain | null
   followLatest?: boolean
   onUserDomainChange?: (domain: ChartDomain) => void
+  jobs: MetricJobOption[]
+  selectedJobKeys: string[]
+  directions: MetricDirection[]
+  latencyStatistics: LatencyStatistic[]
 }
 
 function formatTimeTick(value: number, current: number, followLatest: boolean): string {
@@ -22,12 +27,12 @@ function formatTimeTick(value: number, current: number, followLatest: boolean): 
   return `-${Math.max(0, age).toFixed(age < 10 ? 1 : 0).replace(/\.0$/, '')}s`
 }
 
-export function StatsChart({ data, title, type, height = 300, xDomain, followLatest = false, onUserDomainChange }: StatsChartProps) {
+export function StatsChart({ data, title, type, height = 300, xDomain, followLatest = false, onUserDomainChange, jobs, selectedJobKeys, directions, latencyStatistics }: StatsChartProps) {
   const chartRef = useRef<HTMLDivElement>(null)
   const plotRef = useRef<uPlot | null>(null)
   const domainCallbackRef = useRef(onUserDomainChange)
   const [width, setWidth] = useState(800)
-  const prevChartRef = useRef<{ type: string; title: string; followLatest: boolean } | null>(null)
+  const prevChartRef = useRef<{ type: string; title: string; followLatest: boolean; seriesKey: string } | null>(null)
 
   useEffect(() => {
     domainCallbackRef.current = onUserDomainChange
@@ -63,48 +68,11 @@ export function StatsChart({ data, title, type, height = 300, xDomain, followLat
 
     const times = getNormalizedTimeline(data)
 
-    let series: uPlot.Series[] = []
-    let rawValues: number[][] = []
-
-    if (type === 'iops') {
-      series = [
-        { label: 'Total', stroke: '#29323d', width: 2 },
-        { label: 'Read', stroke: '#0b8198', width: 2 },
-        { label: 'Write', stroke: '#c56b05', width: 2 },
-      ]
-      rawValues = [
-        data.map((d) => d.iops),
-        data.map((d) => d.iopsRead),
-        data.map((d) => d.iopsWrite),
-      ]
-    } else if (type === 'bw') {
-      series = [
-        { label: 'Total', stroke: '#29323d', width: 2 },
-        { label: 'Read', stroke: '#0b8198', width: 2 },
-        { label: 'Write', stroke: '#c56b05', width: 2 },
-      ]
-      rawValues = [
-        data.map((d) => d.bw),
-        data.map((d) => d.bwRead),
-        data.map((d) => d.bwWrite),
-      ]
-    } else if (type === 'lat') {
-      series = [
-        { label: 'Mean', stroke: '#157a5b', width: 2 },
-        { label: 'P95', stroke: '#0b8198', width: 2 },
-        { label: 'P99', stroke: '#c56b05', width: 2 },
-        { label: 'Max', stroke: '#b83232', width: 2 },
-      ]
-      rawValues = [
-        data.map((d) => d.latMean),
-        data.map((d) => d.latP95),
-        data.map((d) => d.latP99),
-        data.map((d) => d.latMax),
-      ]
-    }
-
-    const presentation = describeMetricPresentation(type, rawValues.flat())
-    const values = rawValues.map((seriesValues) => seriesValues.map((value) => presentation.transform(value)))
+    const definitions = buildLiveMetricSeries(data, type, jobs, selectedJobKeys, directions, latencyStatistics)
+    const seriesKey = definitions.map((definition) => definition.label).join('|')
+    const numericValues = definitions.flatMap((definition) => definition.values.filter((value): value is number => value != null))
+    const presentation = describeMetricPresentation(type, numericValues)
+    const values = definitions.map((definition) => definition.values.map((value) => value == null ? null : presentation.transform(value)))
     const plotData: uPlot.AlignedData = [times, ...values]
 
     const safeWidth = Math.max(1, width)
@@ -122,9 +90,11 @@ export function StatsChart({ data, title, type, height = 300, xDomain, followLat
       height,
       series: [
         { label: 'Time (s)' },
-        ...series.map((item) => ({
-          ...item,
-          label: `${item.label} (${presentation.unit})`,
+        ...definitions.map((definition) => ({
+          label: `${definition.label} (${presentation.unit})`,
+          stroke: definition.color,
+          width: definition.width,
+          dash: definition.dash,
           value: (_u: uPlot, value: number | null) =>
             value == null ? '' : `${Number(value).toFixed(Math.abs(Number(value)) >= 10 ? 0 : 2)} ${presentation.unit}`,
         })),
@@ -178,7 +148,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, followLat
     }
 
     if (plotRef.current) {
-      if (prevChartRef.current?.type !== type || prevChartRef.current.title !== title || prevChartRef.current.followLatest !== followLatest) {
+      if (prevChartRef.current?.type !== type || prevChartRef.current.title !== title || prevChartRef.current.followLatest !== followLatest || prevChartRef.current.seriesKey !== seriesKey) {
         // Metric definitions and the uPlot title are immutable after construction.
         plotRef.current.destroy()
         plotRef.current = null
@@ -190,7 +160,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, followLat
         plotRef.current.setScale('x', domain)
       }
     }
-    prevChartRef.current = { type, title, followLatest }
+    prevChartRef.current = { type, title, followLatest, seriesKey }
 
     if (!plotRef.current) {
       plotRef.current = new uPlot(opts, plotData, chartRef.current!)
@@ -198,7 +168,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, followLat
         plotRef.current.setScale('x', xDomain)
       }
     }
-  }, [data, type, title, width, height, xDomain, followLatest])
+  }, [data, type, title, width, height, xDomain, followLatest, jobs, selectedJobKeys, directions, latencyStatistics])
 
   // Destroy only on unmount
   useEffect(() => {
@@ -212,7 +182,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, followLat
 
   return (
     <div className="w-full">
-      <div ref={chartRef} className="metric-chart live-chart" style={{ width: '100%', height: `${height + 52}px` }} />
+      <div ref={chartRef} className="metric-chart live-chart" style={{ width: '100%', minHeight: `${height + 52}px` }} />
     </div>
   )
 }

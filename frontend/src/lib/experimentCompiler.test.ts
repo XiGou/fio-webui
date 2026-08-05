@@ -24,6 +24,16 @@ describe('compileExperimentToTaskList', () => {
     const result = compileExperimentToTaskList(exp)
     expect(result.errors[0]).toContain('至少需要 1 个 Job')
   })
+
+  it('rejects duplicate job names because metric identity must be stable', () => {
+    const exp = defaultExperiment()
+    exp.stages[0].jobs = [
+      { ...exp.stages[0].jobs[0], id: 'j1', name: 'reader' },
+      { ...exp.stages[0].jobs[0], id: 'j2', name: 'reader' },
+    ]
+    const result = compileExperimentToTaskList(exp)
+    expect(result.errors[0]).toContain('Job 名称必须唯一')
+  })
 })
 
 describe('experimentFromTaskList', () => {
