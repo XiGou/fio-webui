@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -61,8 +62,12 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		// 		}
 		// 	}
 
-		case <-s.executor.GetOutputChan():
-			// Output is persisted server-side; frontend fetches log-summary API (summary + errors only)
+		case line := <-s.executor.GetOutputChan():
+			// Send raw output line for real-time console display
+			if s.debug {
+				log.Printf("[DEBUG] WebSocket sending output: %s", strings.TrimSpace(line))
+			}
+			sendMsg(SSEMessage{Type: "output", Data: line})
 
 		case status := <-s.executor.GetStatusChan():
 			// Send real-time aggregated stats updates (same shape as /api/stats)

@@ -112,6 +112,19 @@ func (s *RunStore) AppendOutput(runID string, line string) error {
 	return err
 }
 
+// GetOutput reads the full output.log for a run
+func (s *RunStore) GetOutput(runID string) (string, error) {
+	dir := s.RunDir(runID)
+	data, err := os.ReadFile(filepath.Join(dir, "output.log"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(data), nil
+}
+
 // AppendStatsLine appends a stats JSON line to stats.jsonl
 func (s *RunStore) AppendStatsLine(runID string, line []byte) error {
 	dir := s.RunDir(runID)
@@ -286,6 +299,7 @@ func (s *RunStore) GetStats(runID string) ([]StatsDataPoint, error) {
 		return nil, err
 	}
 	var points []StatsDataPoint
+	pointIndex := make(map[int64]int)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -295,6 +309,11 @@ func (s *RunStore) GetStats(runID string) ([]StatsDataPoint, error) {
 		if err := json.Unmarshal([]byte(line), &p); err != nil {
 			continue
 		}
+		if index, exists := pointIndex[p.Time]; exists {
+			points[index] = p
+			continue
+		}
+		pointIndex[p.Time] = len(points)
 		points = append(points, p)
 	}
 	return points, nil

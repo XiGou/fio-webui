@@ -61,6 +61,7 @@ func NewExecutor(workDir string, store *RunStore) *Executor {
 			Status: StatusIdle,
 		},
 		statusCh: make(chan *StatusUpdate, 100),
+		outputCh: make(chan string, 100),
 	}
 }
 
@@ -105,6 +106,28 @@ func (e *Executor) GetCurrentRunID() string {
 		return ""
 	}
 	return e.state.ID
+}
+
+func (e *Executor) saveInitialMeta(runID string, startTime time.Time, metadata *RunMetadata) {
+	if e.RunStore == nil {
+		return
+	}
+
+	meta := &RunMeta{
+		ID:        runID,
+		Status:    string(StatusRunning),
+		StartTime: startTime.Format(time.RFC3339),
+		DiskBytes: 0,
+	}
+	if metadata != nil {
+		meta.WorkflowID = metadata.WorkflowID
+		meta.WorkflowVersion = metadata.WorkflowVersion
+		meta.CompiledAt = metadata.CompiledAt
+	}
+
+	if err := e.RunStore.SaveMeta(runID, meta); err != nil && Debug {
+		log.Printf("[DEBUG] SaveMeta(initial): %v", err)
+	}
 }
 
 func (e *Executor) Run(config *FioConfig) (*RunState, error) {
@@ -190,11 +213,13 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 		}
 	}
 
+	startTime := time.Now()
 	e.state = &RunState{
 		ID:        runID,
 		Status:    StatusRunning,
-		StartTime: time.Now(),
+		StartTime: startTime,
 	}
+	e.saveInitialMeta(runID, startTime, nil)
 
 	e.outputCh = make(chan string, 100)
 	if e.statusCh == nil {
@@ -250,11 +275,13 @@ func (e *Executor) RunTasks(tasks []FioTask, metadata *RunMetadata) (*RunState, 
 		os.MkdirAll(runDir, 0755)
 	}
 
+	startTime := time.Now()
 	e.state = &RunState{
 		ID:        runID,
 		Status:    StatusRunning,
-		StartTime: time.Now(),
+		StartTime: startTime,
 	}
+	e.saveInitialMeta(runID, startTime, metadata)
 
 	e.outputCh = make(chan string, 100)
 	if e.statusCh == nil {
@@ -292,35 +319,17 @@ func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runI
 			Jobs:   task.Jobs,
 		}
 
-		// Generate jobfile for this task
-		hasStonewall := false
-		for _, job := range task.Jobs {
-			if job.StonewallAfter {
-				hasStonewall = true
-				break
-			}
+		// One task is one execution node. fio runs all jobs in the same
+		// jobfile concurrently unless an imported legacy barrier says otherwise.
+		if len(task.Jobs) == 0 {
+			continue
 		}
 
-		var jobFile string
 		taskLogPrefix := filepath.Join(runDir, fmt.Sprintf("task%d", i))
-		if hasStonewall {
-			jobFile = filepath.Join(runDir, fmt.Sprintf("task%d.fio", i))
-			jobContent := config.ToINI(taskLogPrefix, -1)
-			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
-				e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
-				return
-			}
-		} else {
-			// Generate one jobfile per job in this task
-			if len(task.Jobs) == 0 {
-				continue
-			}
-			jobFile = filepath.Join(runDir, fmt.Sprintf("task%d_job0.fio", i))
-			jobContent := config.ToINI(taskLogPrefix, 0)
-			if err := os.WriteFile(jobFile, []byte(jobContent), 0644); err != nil {
-				e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
-				return
-			}
+		jobFile, err := writeTaskJobFile(runDir, i, config)
+		if err != nil {
+			e.setError(runID, fmt.Errorf("failed to write job file for task %d: %w", i, err))
+			return
 		}
 
 		// Run this task
@@ -340,6 +349,15 @@ func (e *Executor) runTasksSequential(ctx context.Context, tasks []FioTask, runI
 		e.finalizeRun(runID)
 	}
 	e.mu.Unlock()
+}
+
+func writeTaskJobFile(runDir string, taskIndex int, config *FioConfig) (string, error) {
+	jobFile := filepath.Join(runDir, fmt.Sprintf("task%d.fio", taskIndex))
+	logPrefix := filepath.Join(runDir, fmt.Sprintf("task%d", taskIndex))
+	if err := os.WriteFile(jobFile, []byte(config.ToINI(logPrefix, -1)), 0644); err != nil {
+		return "", err
+	}
+	return jobFile, nil
 }
 
 // runFioSequential runs multiple fio commands sequentially (one after another)

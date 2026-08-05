@@ -233,12 +233,27 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			json.NewEncoder(w).Encode(summary)
 			return
 		}
+		if sub == "output" {
+			output, err := s.runStore.GetOutput(id)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Write([]byte(output))
+			return
+		}
 		if sub == "stats" {
 			points, err := s.runStore.GetStats(id)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			q := r.URL.Query()
+			from, _ := strconv.ParseInt(q.Get("from"), 10, 64)
+			to, _ := strconv.ParseInt(q.Get("to"), 10, 64)
+			limit, _ := strconv.Atoi(q.Get("limit"))
+			points = fio.FilterStatsPoints(points, from, to, limit)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(points)
 			return
@@ -269,6 +284,8 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 			escapedData := template.JSEscapeString(string(reportJSON))
 			html := strings.ReplaceAll(s.reportTpl, "__REPORT_DATA__", escapedData)
 			html = strings.ReplaceAll(html, "__REPORT_GENERATED_AT__", strconv.FormatInt(time.Now().Unix(), 10))
+			html = strings.ReplaceAll(html, "__UPLOT_JS__", s.uPlotJS)
+			html = strings.ReplaceAll(html, "__UPLOT_CSS__", s.uPlotCSS)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Header().Set("Content-Disposition", "attachment; filename=\""+reportFileName(id, "html")+"\"")
 			http.ServeContent(w, r, "", time.Now(), bytes.NewReader([]byte(html)))

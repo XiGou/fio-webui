@@ -7,7 +7,7 @@ tmp_dir = "tmp"
 
 [build]
   cmd = "go build -o ./tmp/main ."
-  bin = "./tmp/main"
+  bin = "./tmp/main -debug"
   full_bin = "./tmp/main"
   include_ext = ["go"]
   exclude_dir = ["tmp", "vendor", "frontend", "web", "node_modules", "docs", ".git"]

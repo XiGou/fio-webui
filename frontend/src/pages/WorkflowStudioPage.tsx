@@ -1,786 +1,332 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, CloudUpload, FilePlus2, FolderOpen, Loader2, Play, Save, ShieldAlert, X } from 'lucide-react'
+import { GlobalInspector } from '@/components/builder/GlobalInspector'
+import { InspectorPanel } from '@/components/builder/InspectorPanel'
+import { ModulePalette } from '@/components/builder/ModulePalette'
+import { PipelineCanvas } from '@/components/builder/PipelineCanvas'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Canvas } from '@/components/workflow/Canvas'
-import fioParameters from '@/data/fio-parameters.json'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
+import { defaultExperiment, experimentFromTaskList } from '@/lib/experimentCompiler'
+import { useBuilderStore } from '@/lib/useBuilderStore'
 import { taskListToWorkflow } from '@/lib/workflowMapper'
-import { WORKFLOW_NODE_TYPE } from '@/types/workflow'
-import type { WorkflowCanvasEdge } from '@/components/workflow/EdgeRenderer'
-import type { WorkflowCanvasNode, WorkflowNodeKind } from '@/components/workflow/NodeRenderer'
-import type { FioTask, FioTaskList, GlobalConfig, JobConfig, RunState } from '@/types/api'
+import type { FioTaskList, RunState, TaskValidationResponse } from '@/types/api'
 
-const VERSION_ITEMS = ['草稿工作流', '模板库', '已发布工作流']
+type ValidationState = { status: 'idle' | 'checking' | 'valid' | 'invalid'; messages: string[] }
+type RestoreState = { restoreRunConfig?: FioTaskList; restoreRunId?: string }
+type WorkflowSummary = { id: string; name: string; description: string; updated_at: string; current_version: number }
+type WorkflowTemplate = WorkflowSummary & { versions: Array<{ version: number; task_list: FioTaskList }> }
+const WORKFLOW_ID_KEY = 'fio-webui:workflow-id:v1'
 
-type ValidationResult = {
-  errors: string[]
-  invalidNodeIds: Set<string>
-  invalidEdgeIds: Set<string>
-}
-
-type CompileError = { nodeId?: string; message: string }
-type CompileResult = {
-  workflowId: string
-  workflowVersion: number
-  compiledAt: string
-  taskList: FioTaskList
-  errors: CompileError[]
-}
-
-type WorkflowTemplateItem = {
-  id: string
-  name: string
-  description: string
-  tags?: string[]
-  current_version: number
-}
-
-type ParamType = 'text' | 'number' | 'boolean' | 'select'
-type FioParamField = { key: string; label: string; type: ParamType; options?: string[]; placeholder?: string }
-type FioParamGroup = { id: string; title: string; collapsedByDefault: boolean; fields: FioParamField[] }
-
-type NodePreset = {
-  id: string
-  name: string
-  description: string
-  kind: WorkflowNodeKind
-  category: '自定义' | '预设'
-  defaults?: Record<string, string | number | boolean>
-}
-
-const FIO_GROUPS = fioParameters.groups as FioParamGroup[]
-
-const NODE_PRESETS: NodePreset[] = [
-  { id: 'custom-start', name: 'StartNode', description: '工作流起点', kind: 'start', category: '自定义' },
-  { id: 'custom-end', name: 'EndNode', description: '工作流终点', kind: 'end', category: '自定义' },
-  {
-    id: 'custom-fio',
-    name: 'FioJobNode',
-    description: '可自定义 fio job 参数',
-    kind: 'fioJob',
-    category: '自定义',
-    defaults: { rw: 'read', bs: '4k', iodepth: 1 },
-  },
-  {
-    id: 'custom-barrier',
-    name: 'BarrierNode',
-    description: 'stonewall / 阶段切换',
-    kind: 'barrier',
-    category: '自定义',
-    defaults: { stonewall: true, phase: 'phase-1' },
-  },
-  {
-    id: 'preset-seq-read',
-    name: '顺序读 128k',
-    description: '常用预设：吞吐型顺序读',
-    kind: 'fioJob',
-    category: '预设',
-    defaults: { label: '顺序读 128k', rw: 'read', bs: '128k', iodepth: 32, numjobs: 1, ioengine: 'io_uring', direct: true },
-  },
-  {
-    id: 'preset-rand-read',
-    name: '随机读 4k',
-    description: '常用预设：低延迟随机读',
-    kind: 'fioJob',
-    category: '预设',
-    defaults: { label: '随机读 4k', rw: 'randread', bs: '4k', iodepth: 64, numjobs: 4, ioengine: 'io_uring', direct: true },
-  },
-  {
-    id: 'preset-rand-write',
-    name: '随机写 4k',
-    description: '常用预设：随机写压测',
-    kind: 'fioJob',
-    category: '预设',
-    defaults: { label: '随机写 4k', rw: 'randwrite', bs: '4k', iodepth: 32, numjobs: 4, ioengine: 'io_uring', direct: true },
-  },
-  {
-    id: 'preset-mix',
-    name: '70/30 混合读写',
-    description: '常用预设：数据库类混合负载',
-    kind: 'fioJob',
-    category: '预设',
-    defaults: { label: '混合读写 70/30', rw: 'randrw', rwmixread: 70, bs: '8k', iodepth: 32, numjobs: 2, ioengine: 'io_uring', direct: true },
-  },
-]
-
-const nextId = (prefix: string) => {
-  const uid = typeof globalThis.crypto?.randomUUID === 'function'
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-  return `${prefix}-${uid}`
-}
-
-const createNode = (preset: NodePreset, index: number): WorkflowCanvasNode => ({
-  id: nextId(preset.kind),
-  type: preset.kind,
-  position: { x: 80 + index * 42, y: 80 + index * 34 },
-  data: {
-    label: `${preset.name}-${index + 1}`,
-    ...(preset.defaults ?? {}),
-  },
-})
-
-const isConnectionLegal = (source: WorkflowCanvasNode | undefined, target: WorkflowCanvasNode | undefined) => {
-  if (!source || !target) return false
-  if (source.id === target.id) return false
-  if (source.type === 'end') return false
-  if (target.type === 'start') return false
-  return true
-}
-
-const validateTopology = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge[]): ValidationResult => {
-  const errors: string[] = []
-  const invalidNodeIds = new Set<string>()
-  const invalidEdgeIds = new Set<string>()
-  const inDegree = new Map<string, number>()
-  const outDegree = new Map<string, number>()
-  const adjacency = new Map<string, string[]>()
-  const nodesById = new Map(nodes.map((node) => [node.id, node]))
-
-  for (const node of nodes) {
-    inDegree.set(node.id, 0)
-    outDegree.set(node.id, 0)
-    adjacency.set(node.id, [])
-  }
-
-  const unique = new Set<string>()
-  for (const edge of edges) {
-    const key = `${edge.source}->${edge.target}`
-    if (unique.has(key)) {
-      invalidEdgeIds.add(edge.id)
-      errors.push(`存在重复连线 ${key}。`)
-      continue
-    }
-    unique.add(key)
-
-    const source = nodesById.get(edge.source)
-    const target = nodesById.get(edge.target)
-    if (!isConnectionLegal(source, target)) {
-      invalidEdgeIds.add(edge.id)
-      if (source) invalidNodeIds.add(source.id)
-      if (target) invalidNodeIds.add(target.id)
-      errors.push(`非法连接 ${edge.source} -> ${edge.target}。`)
-      continue
-    }
-
-    adjacency.get(edge.source)?.push(edge.target)
-    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1)
-    outDegree.set(edge.source, (outDegree.get(edge.source) ?? 0) + 1)
-  }
-
-  const starts = nodes.filter((node) => node.type === 'start')
-  const ends = nodes.filter((node) => node.type === 'end')
-
-  if (starts.length !== 1) {
-    errors.push('拓扑必须且仅有一个 StartNode。')
-    starts.forEach((node) => invalidNodeIds.add(node.id))
-  }
-  if (ends.length !== 1) {
-    errors.push('拓扑必须且仅有一个 EndNode。')
-    ends.forEach((node) => invalidNodeIds.add(node.id))
-  }
-
-  nodes.forEach((node) => {
-    const inCount = inDegree.get(node.id) ?? 0
-    const outCount = outDegree.get(node.id) ?? 0
-    if (node.type === 'start' && inCount > 0) {
-      errors.push(`StartNode ${node.id} 不能有入边。`)
-      invalidNodeIds.add(node.id)
-    }
-    if (node.type === 'end' && outCount > 0) {
-      errors.push(`EndNode ${node.id} 不能有出边。`)
-      invalidNodeIds.add(node.id)
-    }
-    if (inCount === 0 && outCount === 0) {
-      errors.push(`节点 ${node.id} 孤立未连接。`)
-      invalidNodeIds.add(node.id)
-    }
-  })
-
-  const visiting = new Set<string>()
-  const visited = new Set<string>()
-  const dfs = (nodeId: string) => {
-    if (visiting.has(nodeId)) {
-      invalidNodeIds.add(nodeId)
-      errors.push(`发现环路，重复访问节点 ${nodeId}。`)
-      return
-    }
-    if (visited.has(nodeId)) return
-    visiting.add(nodeId)
-    for (const nextId of adjacency.get(nodeId) ?? []) dfs(nextId)
-    visiting.delete(nodeId)
-    visited.add(nodeId)
-  }
-  nodes.forEach((node) => dfs(node.id))
-
-  return { errors: Array.from(new Set(errors)), invalidNodeIds, invalidEdgeIds }
-}
-
-
-const DEFAULT_GLOBAL: GlobalConfig = {
-  ioengine: 'libaio',
-  direct: true,
-  runtime: 60,
-  time_based: true,
-  group_reporting: true,
-  log_avg_msec: 500,
-  output_format: 'json',
-  status_interval: 1,
-}
-
-const buildCompiledTaskList = (nodes: WorkflowCanvasNode[], edges: WorkflowCanvasEdge[]): CompileResult => {
-  const compiledAt = new Date().toISOString()
-  const workflowId = `wf-${Date.now().toString(36)}`
-  const errors: CompileError[] = []
-  const taskList: FioTaskList = { tasks: [] }
-  const nodeById = new Map(nodes.map((n) => [n.id, n]))
-  const indegree = new Map<string, number>()
-  const adjacency = new Map<string, string[]>()
-  for (const node of nodes) {
-    indegree.set(node.id, 0)
-    adjacency.set(node.id, [])
-  }
-  for (const edge of edges) {
-    if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) continue
-    adjacency.get(edge.source)?.push(edge.target)
-    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1)
-  }
-  const queue = nodes.filter((n) => (indegree.get(n.id) ?? 0) === 0).map((n) => n.id)
-  const order: string[] = []
-  while (queue.length > 0) {
-    const id = queue.shift()
-    if (!id) break
-    order.push(id)
-    for (const nextId of adjacency.get(id) ?? []) {
-      const next = (indegree.get(nextId) ?? 1) - 1
-      indegree.set(nextId, next)
-      if (next === 0) queue.push(nextId)
-    }
-  }
-  const sortedNodes = order.length === nodes.length ? order.map((id) => nodeById.get(id)!).filter(Boolean) : nodes
-  let currentTask: FioTask | null = null
-  const flush = () => { if (currentTask && currentTask.jobs.length > 0) taskList.tasks.push(currentTask); currentTask = null }
-  for (const node of sortedNodes) {
-    if (node.type === 'start' || node.type === 'end') continue
-    if (node.type === 'barrier') {
-      if (!currentTask || currentTask.jobs.length === 0) {
-        errors.push({ nodeId: node.id, message: 'Barrier 节点前缺少 job。' })
-        continue
-      }
-      currentTask.jobs[currentTask.jobs.length - 1] = { ...currentTask.jobs[currentTask.jobs.length - 1], stonewallAfter: true }
-      flush()
-      continue
-    }
-    const filename = String(node.data.filename ?? '/tmp/fio-test').trim()
-    if (!filename) errors.push({ nodeId: node.id, message: 'filename 不能为空。' })
-    const rw = String(node.data.rw ?? 'read').trim()
-    const bs = String(node.data.bs ?? '4k').trim()
-    const size = String(node.data.size ?? '1G').trim()
-    const job: JobConfig = {
-      name: String(node.data.label ?? node.id), filename: filename || '/tmp/fio-test', rw, bs, size,
-      numjobs: Number(node.data.numjobs ?? 1), iodepth: Number(node.data.iodepth ?? 1),
-      rwmixread: Number(node.data.rwmixread ?? 70), rate: String(node.data.rate ?? ''), runtime: Number(node.data.runtime ?? 0),
-      ioengine: String(node.data.ioengine ?? ''), nodeId: node.id,
-    }
-    if (!currentTask) {
-      currentTask = { name: String(node.data.taskName ?? `task-${taskList.tasks.length + 1}`), global: { ...DEFAULT_GLOBAL }, jobs: [] }
-    }
-    currentTask.jobs.push(job)
-  }
-  flush()
-  if (taskList.tasks.length === 0) errors.push({ message: '编译后无可执行任务。' })
-  return { workflowId, workflowVersion: 1, compiledAt, taskList, errors }
+function isDestructive(rw: string): boolean {
+  return rw.includes('write') || rw.includes('rw') || rw.includes('trim')
 }
 
 export function WorkflowStudioPage() {
-  const [activeVersion, setActiveVersion] = useState(VERSION_ITEMS[0])
-  const [libraryOpen, setLibraryOpen] = useState(false)
-  const [propertyOpen, setPropertyOpen] = useState(false)
-  const [librarySearch, setLibrarySearch] = useState('')
-  const [nodes, setNodes] = useState<WorkflowCanvasNode[]>([
-    { id: 'start-1', type: 'start', position: { x: 80, y: 120 }, data: { label: '开始' } },
-    { id: 'fio-1', type: 'fioJob', position: { x: 360, y: 120 }, data: { label: '顺序读', rw: 'read', bs: '128k', iodepth: 1 } },
-    { id: 'end-1', type: 'end', position: { x: 650, y: 120 }, data: { label: '结束' } },
-  ])
-  const [edges, setEdges] = useState<WorkflowCanvasEdge[]>([
-    { id: 'edge-1', source: 'start-1', target: 'fio-1' },
-    { id: 'edge-2', source: 'fio-1', target: 'end-1' },
-  ])
-  const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([])
-  const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([])
-  const [validation, setValidation] = useState<ValidationResult>({ errors: [], invalidNodeIds: new Set(), invalidEdgeIds: new Set() })
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(FIO_GROUPS.map((group) => [group.id, group.collapsedByDefault]))
-  )
-  const [compileResult, setCompileResult] = useState<CompileResult | null>(null)
-  const [runError, setRunError] = useState('')
-  const [isRunning, setIsRunning] = useState(false)
-  const [templates, setTemplates] = useState<WorkflowTemplateItem[]>([])
-  const [templateMessage, setTemplateMessage] = useState('')
-  const [compatibilityHints, setCompatibilityHints] = useState<string[]>([])
-  const location = useLocation()
   const navigate = useNavigate()
+  const location = useLocation()
+  const {
+    experiment, setExperiment, replaceExperiment,
+    selectedStage, selectedJob, selectedStageId, selectedJobId,
+    setSelectedStageId, setSelectedJobId, addStage, updateStage, removeStage,
+    addJob, updateJob, removeJob, moveStage, compileResult,
+  } = useBuilderStore()
+  const [inspectorTab, setInspectorTab] = useState<'node' | 'global'>('node')
+  const [validation, setValidation] = useState<ValidationState>({ status: 'idle', messages: [] })
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState('')
+  const [workflowId, setWorkflowId] = useState(() => localStorage.getItem(WORKFLOW_ID_KEY) ?? '')
+  const [workflowLibraryOpen, setWorkflowLibraryOpen] = useState(false)
+  const [workflowLibrary, setWorkflowLibrary] = useState<WorkflowSummary[]>([])
+  const [workflowLibraryLoading, setWorkflowLibraryLoading] = useState(false)
+  const [runReviewOpen, setRunReviewOpen] = useState(false)
+  const [runBusy, setRunBusy] = useState(false)
+  const [runError, setRunError] = useState('')
+  const runDialogRef = useRef<HTMLElement>(null)
+  const runTriggerRef = useRef<HTMLButtonElement>(null)
+  const runCancelRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    const restoreRunConfig = location.state?.restoreRunConfig as FioTaskList | undefined
-    if (!restoreRunConfig?.tasks?.length) return
-    const mapped = taskListToWorkflow(restoreRunConfig)
-    const restoredNodes: WorkflowCanvasNode[] = [
-      { id: 'start-restore', type: 'start', position: { x: 80, y: 120 }, data: { label: '开始' } },
-      ...mapped.nodes.map((node, index) => {
-        if (node.type === WORKFLOW_NODE_TYPE.CONTROL_STONEWALL) {
-          return {
-            id: `restore-${node.id}`,
-            type: 'barrier' as const,
-            position: { x: 280 + index * 220, y: 120 },
-            data: { label: node.label ?? 'stonewall', stonewall: true, phase: node.label ?? 'stonewall' },
-          }
-        }
-        const cfg = node.config as { taskName?: string; job?: JobConfig }
-        return {
-          id: `restore-${node.id}`,
-          type: 'fioJob' as const,
-          position: { x: 280 + index * 220, y: 120 },
-          data: {
-            label: node.label ?? `恢复节点-${index + 1}`,
-            taskName: cfg.taskName,
-            ...(cfg.job ?? {}),
-          },
-        }
-      }),
-      { id: 'end-restore', type: 'end', position: { x: 280 + mapped.nodes.length * 220, y: 120 }, data: { label: '结束' } },
-    ]
-    const restoredEdges: WorkflowCanvasEdge[] = restoredNodes.slice(1).map((node, index) => ({
-      id: `restore-edge-${index}`,
-      source: restoredNodes[index].id,
-      target: node.id,
-    }))
-    setNodes(restoredNodes)
-    setEdges(restoredEdges)
-    setSelectedNodeIds([])
-    setSelectedEdgeIds([])
-    setCompileResult(null)
-    setValidation({ errors: [], invalidNodeIds: new Set(), invalidEdgeIds: new Set() })
-    navigate('/', { replace: true, state: {} })
-  }, [location.state, navigate])
+    if (workflowId) localStorage.setItem(WORKFLOW_ID_KEY, workflowId)
+    else localStorage.removeItem(WORKFLOW_ID_KEY)
+  }, [workflowId])
 
   useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === 'b') setLibraryOpen((value) => !value)
-      if (event.key.toLowerCase() === 'p') setPropertyOpen((value) => !value)
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        const selectedNodeSet = new Set(selectedNodeIds)
-        if (selectedNodeSet.size > 0) {
-          setNodes((previous) => previous.filter((node) => !selectedNodeSet.has(node.id)))
-          setEdges((previous) => previous.filter((edge) => !selectedNodeSet.has(edge.source) && !selectedNodeSet.has(edge.target)))
-          setSelectedNodeIds([])
-          setSelectedEdgeIds([])
-          setCompileResult(null)
-          return
-        }
-        if (selectedEdgeIds.length > 0) {
-          setEdges((previous) => previous.filter((edge) => !selectedEdgeIds.includes(edge.id)))
-          setSelectedEdgeIds([])
-          setCompileResult(null)
-        }
-      }
-      if (event.key.toLowerCase() === 'v' && (event.ctrlKey || event.metaKey)) {
+    const state = location.state as RestoreState | null
+    if (!state?.restoreRunConfig?.tasks?.length) return
+    replaceExperiment(experimentFromTaskList(state.restoreRunConfig, state.restoreRunId))
+    setWorkflowId('')
+    navigate('/', { replace: true })
+  }, [location.state, navigate, replaceExperiment])
+
+  useEffect(() => {
+    setValidation({ status: 'idle', messages: [] })
+    setSavedAt('')
+  }, [experiment])
+
+  const closeRunReview = useCallback(() => setRunReviewOpen(false), [])
+
+  useEffect(() => {
+    if (!runReviewOpen) return
+    const dialog = runDialogRef.current
+    const previousFocus = document.activeElement as HTMLElement | null
+    runCancelRef.current?.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
         event.preventDefault()
-        setValidation(validateTopology(nodes, edges))
+        closeRunReview()
+        return
+      }
+      if (event.key !== 'Tab' || !dialog) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
       }
     }
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [nodes, edges, selectedNodeIds, selectedEdgeIds])
 
-  const loadTemplates = async () => {
-    const res = await fetch('/api/workflows')
-    if (!res.ok) return
-    const items = await res.json().catch(() => []) as WorkflowTemplateItem[]
-    setTemplates(items)
-  }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previousFocus?.focus()
+    }
+  }, [closeRunReview, runReviewOpen])
 
-  useEffect(() => {
-    loadTemplates()
-  }, [])
+  const targets = useMemo(() => Array.from(new Set(compileResult.taskList.tasks.flatMap((task) => task.jobs.map((job) => job.filename)))), [compileResult.taskList.tasks])
+  const destructiveJobs = useMemo(() => compileResult.taskList.tasks.flatMap((task) => task.jobs).filter((job) => isDestructive(job.rw)), [compileResult.taskList.tasks])
+  const jobCount = useMemo(() => experiment.stages.reduce((sum, stage) => sum + stage.jobs.length, 0), [experiment.stages])
 
-  const selectedNode = useMemo(
-    () => nodes.find((node) => selectedNodeIds.length === 1 && node.id === selectedNodeIds[0]),
-    [nodes, selectedNodeIds]
-  )
-
-  const visiblePresets = useMemo(() => {
-    const keyword = librarySearch.trim().toLowerCase()
-    if (!keyword) return NODE_PRESETS
-    return NODE_PRESETS.filter((preset) => `${preset.name} ${preset.description} ${preset.category}`.toLowerCase().includes(keyword))
-  }, [librarySearch])
-
-  const updateSelectedNodeData = (field: string, value: string | number | boolean) => {
-    if (!selectedNode) return
-    setNodes((previous) => previous.map((node) => (node.id === selectedNode.id ? { ...node, data: { ...node.data, [field]: value } } : node)))
-  }
-
-  const canConnect = (sourceId: string, targetId: string) => {
-    const source = nodes.find((node) => node.id === sourceId)
-    const target = nodes.find((node) => node.id === targetId)
-    if (!isConnectionLegal(source, target)) {
+  const validate = useCallback(async (): Promise<boolean> => {
+    if (compileResult.errors.length) {
+      setValidation({ status: 'invalid', messages: compileResult.errors })
       return false
     }
-    return !edges.some((edge) => edge.source === sourceId && edge.target === targetId)
-  }
+    setValidation({ status: 'checking', messages: [] })
+    try {
+      const responses = await Promise.all(compileResult.taskList.tasks.map(async (task) => {
+        const response = await fetch('/api/validate', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ global: task.global, jobs: task.jobs }),
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        return (await response.json()) as TaskValidationResponse
+      }))
+      const messages = responses.flatMap((result) => [
+        ...(result.errors ?? []).map((item) => `${item.field}: ${item.message}`),
+        ...(result.warnings ?? []).map((item) => `${item.field}: ${item.message}`),
+      ])
+      const valid = responses.every((result) => result.valid)
+      setValidation({ status: valid ? 'valid' : 'invalid', messages })
+      return valid
+    } catch (error) {
+      setValidation({ status: 'invalid', messages: [`无法完成后端校验：${error instanceof Error ? error.message : '网络错误'}`] })
+      return false
+    }
+  }, [compileResult])
 
-  const compileWorkflow = () => {
-    const topo = validateTopology(nodes, edges)
-    const compiled = buildCompiledTaskList(nodes, edges)
-    const invalidNodeIds = new Set([...topo.invalidNodeIds, ...compiled.errors.filter((e) => e.nodeId).map((e) => e.nodeId as string)])
-    setValidation({ ...topo, invalidNodeIds, errors: [...topo.errors, ...compiled.errors.map((e) => e.message)] })
-    setCompileResult(compiled.errors.length === 0 && topo.errors.length === 0 ? compiled : null)
-  }
-
-  const runCompiledWorkflow = async () => {
-    if (!compileResult) return
-    setIsRunning(true)
+  const prepareRun = async () => {
     setRunError('')
-    const res = await fetch('/api/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tasks: compileResult.taskList.tasks, workflow_id: compileResult.workflowId, workflow_version: compileResult.workflowVersion, compiled_at: compileResult.compiledAt }),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({})) as { error?: string }
-      setRunError(err.error ?? res.statusText)
-      setIsRunning(false)
-      return
-    }
-    const runState = await res.json().catch(() => null) as RunState | null
-    setIsRunning(false)
-    navigate(`/monitor${runState?.id ? `?runId=${runState.id}` : ''}`)
+    if (await validate()) setRunReviewOpen(true)
   }
 
-  const saveAsTemplate = async () => {
-    const compiled = compileResult ?? buildCompiledTaskList(nodes, edges)
-    if (compiled.errors.length > 0) {
-      setTemplateMessage('请先修复编译错误后再保存模板。')
-      return
+  const openWorkflowLibrary = async () => {
+    setWorkflowLibraryOpen(true)
+    setWorkflowLibraryLoading(true)
+    try {
+      const response = await fetch('/api/workflows')
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      setWorkflowLibrary(await response.json() as WorkflowSummary[])
+    } catch (error) {
+      setRunError(`读取工作流失败：${error instanceof Error ? error.message : '网络错误'}`)
+    } finally {
+      setWorkflowLibraryLoading(false)
     }
-    const name = window.prompt('模板名称', `工作流模板-${new Date().toLocaleString()}`)?.trim()
-    if (!name) return
-    const description = window.prompt('模板描述', '从 Studio 保存的模板') ?? ''
-    const tags = (window.prompt('模板标签（逗号分隔）', 'studio') ?? '').split(',').map((i) => i.trim()).filter(Boolean)
-    const res = await fetch('/api/workflows', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, tags, created_by: 'studio-user', task_list: compiled.taskList }),
-    })
-    if (!res.ok) {
-      setTemplateMessage(`保存模板失败: ${res.statusText}`)
-      return
-    }
-    setTemplateMessage('模板已保存。')
-    loadTemplates()
   }
 
-  const createFromTemplate = async () => {
-    if (templates.length === 0) {
-      setTemplateMessage('暂无模板可用。')
-      return
+  const loadWorkflow = async (id: string) => {
+    setWorkflowLibraryLoading(true)
+    try {
+      const response = await fetch(`/api/workflows/${id}`)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const template = await response.json() as WorkflowTemplate
+      const latest = template.versions.find((version) => version.version === template.current_version) ?? template.versions.at(-1)
+      if (!latest?.task_list.tasks.length) throw new Error('工作流没有可恢复的任务版本')
+      const restored = experimentFromTaskList(latest.task_list)
+      replaceExperiment({ ...restored, name: template.name, description: template.description })
+      setWorkflowId(template.id)
+      setWorkflowLibraryOpen(false)
+    } catch (error) {
+      setRunError(`打开工作流失败：${error instanceof Error ? error.message : '网络错误'}`)
+    } finally {
+      setWorkflowLibraryLoading(false)
     }
-    const input = window.prompt(`输入模板ID进行加载:
-${templates.map((t) => `${t.id} (${t.name})`).join('\n')}`)?.trim()
-    if (!input) return
-    const res = await fetch(`/api/workflows/${input}`)
-    if (!res.ok) {
-      setTemplateMessage('模板不存在。')
-      return
-    }
-    const detail = await res.json() as { versions: Array<{ task_list: FioTaskList; compatibility?: { hints?: string[] } }> }
-    const latest = detail.versions?.[detail.versions.length - 1]
-    if (!latest?.task_list?.tasks?.length) {
-      setTemplateMessage('模板内容为空。')
-      return
-    }
-    const mapped = taskListToWorkflow(latest.task_list)
-    const restoredNodes: WorkflowCanvasNode[] = [
-      { id: 'start-template', type: 'start', position: { x: 80, y: 120 }, data: { label: '开始' } },
-      ...mapped.nodes.map((node, index) => ({
-        id: `template-${node.id}`,
-        type: node.type === WORKFLOW_NODE_TYPE.CONTROL_STONEWALL ? 'barrier' as const : 'fioJob' as const,
-        position: { x: 280 + index * 220, y: 120 },
-        data: node.type === WORKFLOW_NODE_TYPE.CONTROL_STONEWALL
-          ? { label: node.label ?? 'stonewall', stonewall: true }
-          : { label: node.label ?? `模板节点-${index + 1}`, ...((node.config as { job?: JobConfig }).job ?? {}) },
-      })),
-      { id: 'end-template', type: 'end', position: { x: 280 + mapped.nodes.length * 220, y: 120 }, data: { label: '结束' } },
-    ]
-    const restoredEdges: WorkflowCanvasEdge[] = restoredNodes.slice(1).map((node, index) => ({ id: `template-edge-${index}`, source: restoredNodes[index].id, target: node.id }))
-    setNodes(restoredNodes)
-    setEdges(restoredEdges)
-    setCompatibilityHints(latest.compatibility?.hints ?? [])
-    setTemplateMessage('已从模板创建工作流。')
   }
 
-  const publishTemplateVersion = async () => {
-    if (templates.length === 0) {
-      setTemplateMessage('暂无模板可发布版本。')
-      return
-    }
-    const compiled = compileResult ?? buildCompiledTaskList(nodes, edges)
-    if (compiled.errors.length > 0) {
-      setTemplateMessage('请先修复编译错误。')
-      return
-    }
-    const id = window.prompt('输入要发布版本的模板ID', templates[0].id)?.trim()
-    if (!id) return
-    const res = await fetch(`/api/workflows/${id}/versions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ published_by: 'studio-user', task_list: compiled.taskList }),
-    })
-    if (!res.ok) {
-      setTemplateMessage(`发布失败: ${res.statusText}`)
-      return
-    }
-    const data = await res.json() as { compatibility?: { hints?: string[] } }
-    setCompatibilityHints(data.compatibility?.hints ?? [])
-    setTemplateMessage('模板新版本已发布。')
-    loadTemplates()
+  const createDraft = () => {
+    replaceExperiment(defaultExperiment())
+    setWorkflowId('')
+    setSavedAt('')
+    setWorkflowLibraryOpen(false)
   }
 
-  const renderFioField = (field: FioParamField) => {
-    const value = selectedNode?.data[field.key]
-
-    if (field.type === 'boolean') {
-      return (
-        <label key={field.key} className="flex items-center justify-between gap-3 rounded border border-border px-2 py-1 text-xs">
-          <span>{field.label}</span>
-          <input type="checkbox" checked={Boolean(value)} onChange={(event) => updateSelectedNodeData(field.key, event.target.checked)} />
-        </label>
-      )
+  const saveWorkflow = async () => {
+    if (compileResult.errors.length) return
+    setSaving(true)
+    try {
+      const body = workflowId
+        ? { published_by: 'studio-user', task_list: compileResult.taskList, workflow: taskListToWorkflow(compileResult.taskList) }
+        : { name: experiment.name, description: experiment.description ?? '', tags: ['pipeline'], created_by: 'studio-user', task_list: compileResult.taskList, workflow: taskListToWorkflow(compileResult.taskList) }
+      const response = await fetch(workflowId ? `/api/workflows/${workflowId}/versions` : '/api/workflows', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      })
+      if (!response.ok) throw new Error(await response.text())
+      const saved = await response.json() as { id?: string }
+      if (saved.id) setWorkflowId(saved.id)
+      setSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+    } catch (error) {
+      setRunError(`保存失败：${error instanceof Error ? error.message : '网络错误'}`)
+    } finally {
+      setSaving(false)
     }
+  }
 
-    if (field.type === 'select') {
-      return (
-        <label key={field.key} className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{field.label}</span>
-          <select className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs" value={String(value ?? '')} onChange={(event) => updateSelectedNodeData(field.key, event.target.value)}>
-            <option value="">未设置</option>
-            {(field.options ?? []).map((option) => (
-              <option key={option} value={option}>{option}</option>
-            ))}
-          </select>
-        </label>
-      )
+  const startRun = async () => {
+    setRunBusy(true)
+    setRunError('')
+    try {
+      const response = await fetch('/api/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks: compileResult.taskList.tasks, workflow_id: workflowId, compiled_at: new Date().toISOString() }),
+      })
+      const state = await response.json().catch(() => ({})) as RunState & { error?: string }
+      if (!response.ok) throw new Error(state.error || '启动失败')
+      setRunReviewOpen(false)
+      navigate(`/monitor?runId=${state.id}`)
+    } catch (error) {
+      setRunError(error instanceof Error ? error.message : '启动失败')
+    } finally {
+      setRunBusy(false)
     }
-
-    return (
-      <label key={field.key} className="space-y-1 text-xs">
-        <span className="text-muted-foreground">{field.label}</span>
-        <Input
-          type={field.type === 'number' ? 'number' : 'text'}
-          value={String(value ?? '')}
-          placeholder={field.placeholder}
-          onChange={(event) => updateSelectedNodeData(field.key, field.type === 'number' ? Number(event.target.value || 0) : event.target.value)}
-        />
-      </label>
-    )
   }
 
   return (
-    <div className="space-y-3">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between py-3">
-          <div>
-            <CardTitle className="text-base font-medium">工作流工作台</CardTitle>
-            <p className="text-xs text-muted-foreground">B: 节点库开关 · P: 属性面板开关 · Del/Backspace: 删除选中节点或边 · Ctrl/Cmd+V: 运行拓扑校验</p>
+    <div className="flex h-full min-h-0 flex-col bg-workbench">
+      <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-2 lg:px-5">
+        <div className="min-w-[220px] flex-1">
+          <Label htmlFor="experiment-name" className="sr-only">测试名称</Label>
+          <Input id="experiment-name" className="h-8 max-w-xl border-0 px-0 text-base font-semibold shadow-none focus-visible:ring-0" value={experiment.name} onChange={(event) => setExperiment((previous) => ({ ...previous, name: event.target.value }))} />
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <span>{experiment.stages.length} 节点</span><span>·</span><span>{jobCount} Job</span><span>·</span>
+            {savedAt ? <span className="text-emerald-700">已保存 {savedAt}</span> : <span>本地草稿</span>}
           </div>
-          <div className="flex items-center gap-2">
-            <div className="flex gap-1 rounded-md border border-border bg-background p-1">
-              {VERSION_ITEMS.map((item) => (
-                <Button key={item} size="sm" variant={item === activeVersion ? 'default' : 'ghost'} className="h-7 px-2 text-xs" onClick={() => setActiveVersion(item)}>
-                  {item}
-                </Button>
-              ))}
-            </div>
-            <Button size="sm" variant="outline" onClick={() => setLibraryOpen((v) => !v)}>{libraryOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />} 节点库</Button>
-            <Button size="sm" variant="outline" onClick={() => setPropertyOpen((v) => !v)}>{propertyOpen ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />} 属性</Button>
-            <Button size="sm" variant="outline" onClick={compileWorkflow}>编译并预览</Button>
-            <Button size="sm" variant="outline" onClick={saveAsTemplate}>保存为模板</Button>
-            <Button size="sm" variant="outline" onClick={createFromTemplate}>从模板新建</Button>
-            <Button size="sm" variant="outline" onClick={publishTemplateVersion}>发布模板版本</Button>
-            <Button size="sm" onClick={runCompiledWorkflow} disabled={!compileResult || isRunning}>执行</Button>
-            <Button size="sm" variant="outline" onClick={() => navigate('/monitor')}>实时状态</Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              disabled={selectedNodeIds.length === 0 && selectedEdgeIds.length === 0}
-              onClick={() => {
-                const selectedNodeSet = new Set(selectedNodeIds)
-                if (selectedNodeSet.size > 0) {
-                  setNodes((previous) => previous.filter((node) => !selectedNodeSet.has(node.id)))
-                  setEdges((previous) => previous.filter((edge) => !selectedNodeSet.has(edge.source) && !selectedNodeSet.has(edge.target)))
-                  setSelectedNodeIds([])
-                  setSelectedEdgeIds([])
-                  setCompileResult(null)
-                  return
-                }
-                if (selectedEdgeIds.length > 0) {
-                  setEdges((previous) => previous.filter((edge) => !selectedEdgeIds.includes(edge.id)))
-                  setSelectedEdgeIds([])
-                  setCompileResult(null)
-                }
-              }}
-            >删除选中</Button>
-          </div>
-        </CardHeader>
-      </Card>
+        </div>
+        <div className="flex items-center gap-2">
+          {validation.status === 'valid' ? <Badge tone="success"><Check className="mr-1 h-3 w-3" />校验通过</Badge> : null}
+          {validation.status === 'invalid' ? <Badge tone="danger"><AlertTriangle className="mr-1 h-3 w-3" />需要修正</Badge> : null}
+          <Button variant="ghost" onClick={openWorkflowLibrary}><FolderOpen />打开</Button>
+          <Button variant="outline" onClick={saveWorkflow} disabled={saving || compileResult.errors.length > 0}>{saving ? <Loader2 className="animate-spin" /> : <Save />}保存版本</Button>
+          <Button ref={runTriggerRef} onClick={prepareRun} disabled={validation.status === 'checking' || jobCount === 0}>{validation.status === 'checking' ? <Loader2 className="animate-spin" /> : <Play />}校验并运行</Button>
+        </div>
+      </header>
 
-      <div className="relative h-[calc(100vh-190px)] min-h-[620px] rounded-md border border-border bg-background p-2">
-        <Canvas
-          nodes={nodes}
-          edges={edges}
-          selectedNodeIds={selectedNodeIds}
-          selectedEdgeIds={selectedEdgeIds}
-          invalidNodeIds={validation.invalidNodeIds}
-          invalidEdgeIds={validation.invalidEdgeIds}
-          onNodeMove={(nodeId, nextPosition) =>
-            setNodes((previous) => previous.map((node) => (node.id === nodeId ? { ...node, position: nextPosition } : node)))
-          }
-          onSelectionChange={(ids) => {
-            setSelectedNodeIds(ids)
-            if (ids.length > 0) {
-              setSelectedEdgeIds([])
-              setPropertyOpen(true)
-            }
-          }}
-          onEdgeSelectionChange={(ids) => {
-            setSelectedEdgeIds(ids)
-            if (ids.length > 0) setSelectedNodeIds([])
-          }}
-          canConnect={canConnect}
-          onConnect={(source, target) => {
-            setEdges((previous) => [...previous, { id: nextId('edge'), source, target }])
-            setCompileResult(null)
-          }}
+      {(runError || validation.messages.length > 0) ? (
+        <div className={cn('flex items-start gap-2 border-b px-4 py-2 text-xs', runError || validation.status === 'invalid' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-900')}>
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{runError || validation.messages.join(' · ')}</span>
+        </div>
+      ) : null}
+
+      <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_360px]">
+        <ModulePalette
+          canAddJob={Boolean(selectedStage)}
+          onAddStage={addStage}
+          onAddJob={(preset) => selectedStage && addJob(selectedStage.id, preset)}
         />
-
-        {libraryOpen ? (
-          <div className="absolute left-4 top-4 z-20 h-[calc(100%-2rem)] w-[320px] rounded-md border border-border bg-background/95 shadow-lg backdrop-blur-sm">
-            <div className="flex h-full flex-col p-3">
-              <div className="mb-3 flex items-center justify-between">
-                <p className="text-sm font-medium">节点库</p>
-                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setLibraryOpen(false)}>收起</Button>
-              </div>
-              <div className="relative mb-3">
-                <Search className="pointer-events-none absolute left-2 top-2 h-4 w-4 text-muted-foreground" />
-                <Input className="pl-8" placeholder="搜索预设或自定义节点" value={librarySearch} onChange={(event) => setLibrarySearch(event.target.value)} />
-              </div>
-              <div className="space-y-2 overflow-auto pr-1">
-                {visiblePresets.map((preset) => (
-                  <button key={preset.id} className="w-full rounded-md border border-border px-3 py-2 text-left hover:bg-muted" onClick={() => setNodes((previous) => [...previous, createNode(preset, previous.length)])}>
-                    <p className="text-xs text-muted-foreground">{preset.category}</p>
-                    <p className="text-sm font-medium">+ {preset.name}</p>
-                    <p className="text-xs text-muted-foreground">{preset.description}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
+        <PipelineCanvas
+          stages={experiment.stages}
+          selectedStageId={selectedStageId}
+          selectedJobId={selectedJobId}
+          onSelectStage={(stageId) => { setSelectedStageId(stageId); setSelectedJobId(null); setInspectorTab('node') }}
+          onSelectJob={(stageId, jobId) => { setSelectedStageId(stageId); setSelectedJobId(jobId); setInspectorTab('node') }}
+          onAddStage={addStage}
+          onAddJob={(stageId) => addJob(stageId)}
+          onDeleteStage={removeStage}
+          onDeleteJob={removeJob}
+          onMoveStage={moveStage}
+        />
+        <aside className="flex min-h-0 flex-col border-l border-border bg-background">
+          <div className="flex h-12 shrink-0 border-b border-border" role="tablist" aria-label="参数范围">
+            <button className={cn('inspector-tab', inspectorTab === 'node' && 'is-active')} type="button" role="tab" aria-selected={inspectorTab === 'node'} onClick={() => setInspectorTab('node')}>当前节点</button>
+            <button className={cn('inspector-tab', inspectorTab === 'global' && 'is-active')} type="button" role="tab" aria-selected={inspectorTab === 'global'} onClick={() => setInspectorTab('global')}>全局默认</button>
           </div>
-        ) : null}
-
-        {propertyOpen ? (
-          <div className="absolute right-4 top-4 z-20 h-[calc(100%-2rem)] w-[360px] rounded-md border border-border bg-background/95 shadow-lg backdrop-blur-sm">
-            <div className="h-full overflow-auto p-3">
-              <div className="mb-3 flex items-center justify-between">
-                <p className="text-sm font-medium">属性面板</p>
-                <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setPropertyOpen(false)}>收起</Button>
-              </div>
-              {!selectedNode ? (
-                <p className="rounded-md border border-dashed border-border p-3 text-sm text-muted-foreground">请选择单个节点后编辑参数。</p>
-              ) : (
-                <>
-                  <div className="mb-3 space-y-2 rounded-md border border-border p-3">
-                    <p className="text-xs text-muted-foreground">节点基础信息</p>
-                    <Input value={String(selectedNode.data.label ?? '')} onChange={(event) => updateSelectedNodeData('label', event.target.value)} />
-                  </div>
-
-                  {selectedNode.type === 'fioJob' ? (
-                    <div className="mb-3 space-y-2 rounded-md border border-border p-3">
-                      <p className="text-xs text-muted-foreground">Fio 全参数（分组）</p>
-                      {FIO_GROUPS.map((group) => (
-                        <div key={group.id} className="rounded border border-border p-2">
-                          <button className="mb-2 flex w-full items-center justify-between text-left text-xs font-medium" onClick={() => setCollapsedGroups((previous) => ({ ...previous, [group.id]: !previous[group.id] }))}>
-                            <span>{group.title}</span>
-                            <span>{collapsedGroups[group.id] ? '展开' : '收起'}</span>
-                          </button>
-                          {collapsedGroups[group.id] ? null : <div className="space-y-2">{group.fields.map((field) => renderFioField(field))}</div>}
-                        </div>
-                      ))}
-                      <div className="space-y-1 rounded border border-dashed border-border p-2">
-                        <p className="text-xs text-muted-foreground">额外自定义参数（最大兼容，手写）</p>
-                        <Input placeholder="例如：randseed=42,io_submit_mode=offload" value={String(selectedNode.data.extraArgs ?? '')} onChange={(event) => updateSelectedNodeData('extraArgs', event.target.value)} />
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {selectedNode.type === 'barrier' ? (
-                    <div className="space-y-2 rounded-md border border-border p-3">
-                      <p className="text-xs text-muted-foreground">阶段控制（BarrierNode）</p>
-                      <Input value={String(selectedNode.data.phase ?? '')} onChange={(event) => updateSelectedNodeData('phase', event.target.value)} />
-                      <label className="flex items-center gap-2 text-xs text-foreground">
-                        <input type="checkbox" checked={Boolean(selectedNode.data.stonewall)} onChange={(event) => updateSelectedNodeData('stonewall', event.target.checked)} />
-                        开启 stonewall
-                      </label>
-                    </div>
-                  ) : null}
-                </>
-              )}
-
-
-              {compileResult ? (
-                <div className="mt-3 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs">
-                  <p className="mb-2 font-medium text-emerald-600">预览模式（{compileResult.taskList.tasks.length} 个任务）</p>
-                  <div className="space-y-2">
-                    {compileResult.taskList.tasks.map((task, taskIndex) => (
-                      <div key={`${task.name}-${taskIndex}`} className="rounded border border-emerald-500/30 p-2">
-                        <p className="font-medium">Task {taskIndex + 1}: {task.name}</p>
-                        <ul className="ml-4 list-disc">
-                          {task.jobs.map((job, jobIndex) => (
-                            <li key={`${job.name}-${jobIndex}`}>Job {jobIndex + 1}: {job.name} · rw={job.rw} · bs={job.bs} · nodeId={job.nodeId ?? '-'}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {runError ? <p className="mt-2 text-xs text-red-500">执行失败：{runError}</p> : null}
-              {templateMessage ? <p className="mt-2 text-xs text-sky-600">{templateMessage}</p> : null}
-              {compatibilityHints.length > 0 ? (
-                <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700">
-                  <p className="font-medium">模板兼容迁移提示</p>
-                  <ul className="list-disc pl-4">{compatibilityHints.map((hint) => <li key={hint}>{hint}</li>)}</ul>
-                </div>
-              ) : null}
-
-              {validation.errors.length > 0 ? (
-                <div className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 p-3">
-                  <p className="mb-2 text-xs font-medium text-red-500">拓扑错误</p>
-                  <ul className="list-inside list-disc space-y-1 text-xs text-red-500">
-                    {validation.errors.map((error) => (
-                      <li key={error}>{error}</li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <p className="mt-3 text-xs text-muted-foreground">暂无校验错误。</p>
-              )}
-            </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4" role="tabpanel">
+            {inspectorTab === 'global' ? (
+              <GlobalInspector values={experiment.global} onChange={(global) => setExperiment((previous) => ({ ...previous, global }))} />
+            ) : (
+              <InspectorPanel
+                experimentGlobal={experiment.global}
+                stage={selectedStage}
+                job={selectedJob}
+                onUpdateStage={(patch) => selectedStage && updateStage(selectedStage.id, patch)}
+                onUpdateJob={(patch) => selectedStage && selectedJob && updateJob(selectedStage.id, selectedJob.id, patch)}
+              />
+            )}
           </div>
-        ) : null}
+        </aside>
       </div>
+
+      {workflowLibraryOpen ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-foreground/40 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setWorkflowLibraryOpen(false) }}>
+          <section className="w-full max-w-2xl border border-border bg-background shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="workflow-library-title">
+            <header className="flex items-center justify-between border-b border-border px-5 py-4"><div><h2 id="workflow-library-title" className="text-base font-semibold">工作流库</h2><p className="text-xs text-muted-foreground">打开已保存定义的最新版本。</p></div><Button size="icon" variant="ghost" aria-label="关闭" onClick={() => setWorkflowLibraryOpen(false)}><X /></Button></header>
+            <div className="max-h-[60vh] overflow-y-auto p-3">
+              {workflowLibraryLoading ? <div className="flex h-28 items-center justify-center"><Loader2 className="animate-spin text-muted-foreground" /></div> : workflowLibrary.map((item) => (
+                <button key={item.id} className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left hover:bg-muted" type="button" onClick={() => loadWorkflow(item.id)}>
+                  <span className="flex h-8 w-8 items-center justify-center bg-muted"><FolderOpen className="h-4 w-4" /></span>
+                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm">{item.name}</strong><small className="block truncate text-xs text-muted-foreground">{item.description || item.id}</small></span>
+                  <span className="font-mono text-[10px] text-muted-foreground">v{item.current_version}</span><ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </button>
+              ))}
+              {!workflowLibraryLoading && workflowLibrary.length === 0 ? <p className="py-10 text-center text-sm text-muted-foreground">还没有已保存工作流。</p> : null}
+            </div>
+            <footer className="flex justify-between border-t border-border bg-muted/40 px-5 py-3"><Button variant="ghost" onClick={createDraft}><FilePlus2 />新建草稿</Button><Button variant="outline" onClick={() => setWorkflowLibraryOpen(false)}>关闭</Button></footer>
+          </section>
+        </div>
+      ) : null}
+
+      {runReviewOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeRunReview() }}>
+          <section ref={runDialogRef} className="w-full max-w-xl border border-border bg-background shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="run-review-title">
+            <header className="flex items-start justify-between border-b border-border px-5 py-4">
+              <div><Badge tone={destructiveJobs.length ? 'warning' : 'success'}>{destructiveJobs.length ? 'WRITE PATH' : 'READ ONLY'}</Badge><h2 id="run-review-title" className="mt-2 text-base font-semibold">执行前复核</h2><p className="text-xs text-muted-foreground">编译结果已通过校验，确认目标与影响范围。</p></div>
+              <Button size="icon" variant="ghost" aria-label="关闭" onClick={closeRunReview}><X /></Button>
+            </header>
+            <div className="space-y-4 p-5">
+              {destructiveJobs.length ? <div className="flex gap-3 border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"><ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" /><span><strong className="block">检测到 {destructiveJobs.length} 个写入工作负载</strong>目标文件或块设备上的既有数据可能被覆盖。</span></div> : null}
+              <dl className="grid grid-cols-[120px_1fr] gap-x-4 gap-y-3 text-sm">
+                <dt className="text-muted-foreground">测试名称</dt><dd className="font-medium">{experiment.name}</dd>
+                <dt className="text-muted-foreground">执行结构</dt><dd>{experiment.stages.length} 节点 / {jobCount} Job</dd>
+                <dt className="text-muted-foreground">预计时长</dt><dd>至少 {String(experiment.global.runtime ?? 60)} 秒 / 节点</dd>
+                <dt className="text-muted-foreground">指标来源</dt><dd className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-emerald-600" />fio stdout/status stream</dd>
+                <dt className="text-muted-foreground">目标</dt><dd className="space-y-1 font-mono text-xs">{targets.map((target) => <div className="break-all" key={target}>{target}</div>)}</dd>
+              </dl>
+            </div>
+            <footer className="flex items-center justify-between border-t border-border bg-muted/40 px-5 py-3">
+              <span className="text-xs text-muted-foreground">运行启动后自动进入实时监控</span>
+              <div className="flex gap-2"><Button ref={runCancelRef} variant="outline" onClick={closeRunReview}>取消</Button><Button className={destructiveJobs.length ? 'bg-amber-600 hover:bg-amber-700' : ''} onClick={startRun} disabled={runBusy}>{runBusy ? <Loader2 className="animate-spin" /> : <CloudUpload />}确认并启动<ChevronRight /></Button></div>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </div>
   )
 }

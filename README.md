@@ -89,6 +89,17 @@ Run separately:
 - Backend: `make dev-backend`
 - Frontend: `make dev-frontend`
 
+### Design workflow
+
+The project vendors [Impeccable](https://github.com/pbakaus/impeccable) under `.agents/skills/impeccable` for Codex design review and detector hooks.
+
+```bash
+cd frontend
+npm run setup:impeccable
+```
+
+Product constraints live in `PRODUCT.md`; the approved visual system and reusable interaction rules live in `DESIGN.md`. Codex users may need to approve the project hook with `/hooks` on first use.
+
 ---
 
 ## Architecture

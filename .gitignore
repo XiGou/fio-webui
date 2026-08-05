@@ -3,3 +3,6 @@
 tmp/
 build-errors.log
 fio-webui
+
+# Impeccable runtime evidence and browser state
+.impeccable/

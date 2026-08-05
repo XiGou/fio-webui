@@ -2,6 +2,8 @@ package fio
 
 import (
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -37,19 +39,20 @@ type GlobalConfig struct {
 }
 
 type JobConfig struct {
-	Name           string `json:"name"`
-	Filename       string `json:"filename"`
-	RW             RWType `json:"rw"`
-	BS             string `json:"bs"`
-	Size           string `json:"size"`
-	NumJobs        int    `json:"numjobs"`
-	IODepth        int    `json:"iodepth"`
-	RWMixRead      int    `json:"rwmixread"`
-	Rate           string `json:"rate,omitempty"`
-	StonewallAfter bool   `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
-	Runtime        int    `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
-	IOEngine       string `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
-	NodeID         string `json:"nodeId,omitempty"`         // Source workflow node ID for traceability
+	Name           string         `json:"name"`
+	Filename       string         `json:"filename"`
+	RW             RWType         `json:"rw"`
+	BS             string         `json:"bs"`
+	Size           string         `json:"size"`
+	NumJobs        int            `json:"numjobs"`
+	IODepth        int            `json:"iodepth"`
+	RWMixRead      int            `json:"rwmixread"`
+	Rate           string         `json:"rate,omitempty"`
+	StonewallAfter bool           `json:"stonewallAfter,omitempty"` // If true, insert stonewall after this job
+	Runtime        int            `json:"runtime,omitempty"`        // Override global runtime for this job (0 means use global)
+	IOEngine       string         `json:"ioengine,omitempty"`       // Override global ioengine for this job (empty means use global)
+	NodeID         string         `json:"nodeId,omitempty"`         // Source workflow node ID for traceability
+	ExtraOptions   map[string]any `json:"extra_options,omitempty"`
 }
 
 type FioConfig struct {
@@ -119,13 +122,16 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 		sb.WriteString(fmt.Sprintf("log_avg_msec=%d\n", c.Global.LogAvgMsec))
 	}
 	// output-format 与 status-interval 为 fio 命令行参数，见 executor.runFio
-	// Enable real-time log output with aggressive flushing
-	sb.WriteString("log_hist_msec=200\n")
-	sb.WriteString("log_max_value=1\n")
 	if logPrefix != "" {
+		histInterval := c.Global.LogAvgMsec
+		if histInterval <= 0 {
+			histInterval = 500
+		}
+		sb.WriteString(fmt.Sprintf("log_hist_msec=%d\n", histInterval))
 		sb.WriteString(fmt.Sprintf("write_bw_log=%s\n", logPrefix))
 		sb.WriteString(fmt.Sprintf("write_iops_log=%s\n", logPrefix))
 		sb.WriteString(fmt.Sprintf("write_lat_log=%s\n", logPrefix))
+		sb.WriteString(fmt.Sprintf("write_hist_log=%s\n", logPrefix))
 		sb.WriteString("per_job_logs=0\n")
 	}
 
@@ -133,29 +139,12 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	if jobIndex == -1 {
 		for i, job := range c.Jobs {
 			sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
-			// Stonewall at the start of this job section means "wait for previous jobs to complete before starting this one"
-			if i > 0 && job.StonewallAfter {
+			// Stonewall is emitted at the start of the next job section when the
+			// previous job requested "stonewall after".
+			if i > 0 && c.Jobs[i-1].StonewallAfter {
 				sb.WriteString("stonewall\n")
 			}
-			// Job-level overrides for runtime and ioengine
-			if job.IOEngine != "" {
-				sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
-			}
-			if job.Runtime > 0 {
-				sb.WriteString(fmt.Sprintf("runtime=%d\n", job.Runtime))
-			}
-			sb.WriteString(fmt.Sprintf("filename=%s\n", job.Filename))
-			sb.WriteString(fmt.Sprintf("rw=%s\n", job.RW))
-			sb.WriteString(fmt.Sprintf("bs=%s\n", job.BS))
-			sb.WriteString(fmt.Sprintf("size=%s\n", job.Size))
-			sb.WriteString(fmt.Sprintf("numjobs=%d\n", job.NumJobs))
-			sb.WriteString(fmt.Sprintf("iodepth=%d\n", job.IODepth))
-			if job.RW == RWRandRW || job.RW == RWReadWrite || job.RW == "rw" {
-				sb.WriteString(fmt.Sprintf("rwmixread=%d\n", job.RWMixRead))
-			}
-			if job.Rate != "" {
-				sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
-			}
+			writeJobConfig(&sb, job)
 		}
 		return sb.String()
 	}
@@ -167,6 +156,12 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	job := c.Jobs[jobIndex]
 
 	sb.WriteString(fmt.Sprintf("\n[%s]\n", job.Name))
+	writeJobConfig(&sb, job)
+
+	return sb.String()
+}
+
+func writeJobConfig(sb *strings.Builder, job JobConfig) {
 	// Job-level overrides for runtime and ioengine
 	if job.IOEngine != "" {
 		sb.WriteString(fmt.Sprintf("ioengine=%s\n", job.IOEngine))
@@ -186,6 +181,57 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	if job.Rate != "" {
 		sb.WriteString(fmt.Sprintf("rate=%s\n", job.Rate))
 	}
+	writeExtraOptions(sb, job.ExtraOptions)
+}
 
-	return sb.String()
+func writeExtraOptions(sb *strings.Builder, options map[string]any) {
+	if len(options) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(options))
+	for key := range options {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	for _, key := range keys {
+		sb.WriteString(fmt.Sprintf("%s=%s\n", key, formatOptionValue(options[key])))
+	}
+}
+
+func formatOptionValue(value any) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "1"
+		}
+		return "0"
+	case string:
+		return typed
+	case int:
+		return strconv.Itoa(typed)
+	case int8:
+		return strconv.FormatInt(int64(typed), 10)
+	case int16:
+		return strconv.FormatInt(int64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
+	case int64:
+		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case float32:
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	default:
+		return fmt.Sprint(typed)
+	}
 }

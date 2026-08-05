@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { History } from 'lucide-react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { FileChartColumn, History } from 'lucide-react'
 import { addUserPreset, buildConfigSummaryFromJobs } from '@/lib/userPresets'
 import { RunsListPanel } from '@/components/history/RunsListPanel'
 import { RunDetailPanel } from '@/components/history/RunDetailPanel'
-import { ArtifactsPanel } from '@/components/history/ArtifactsPanel'
-import type { LogSummary, StatsDataPoint } from '@/types/api'
+import type { RunReportDTO } from '@/types/api'
 import type { HistoryAction, HistoryFilterState, RunDetail, RunRecordExt } from '@/components/history/types'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`
 }
 
 function formatTime(s: string): string {
@@ -50,22 +49,14 @@ export function HistoryPage() {
   const [detail, setDetail] = useState<RunDetail | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([])
-  const [logSummary, setLogSummary] = useState<LogSummary | null>(null)
-  const [statsData, setStatsData] = useState<StatsDataPoint[]>([])
-  const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
-  const [statsRange, setStatsRange] = useState<'all' | '15m' | '1h' | '6h' | '24h'>('all')
+  const [report, setReport] = useState<RunReportDTO | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [detailError, setDetailError] = useState('')
   const [filters, setFilters] = useState<HistoryFilterState>({ search: '', status: 'all', timeRange: 'all', tag: 'all', templateSource: 'all' })
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const autoOpenedRunRef = useRef('')
   const navigate = useNavigate()
-
-  const normalizeStatsPoint = useCallback((raw: unknown): StatsDataPoint | null => {
-    if (!raw || typeof raw !== 'object') return null
-    const r = raw as Record<string, unknown>
-    const time = Number(r.time)
-    if (!Number.isFinite(time) || time < 0) return null
-    const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)
-    return { time, iops: num(r.iops), iopsRead: num(r.iopsRead), iopsWrite: num(r.iopsWrite), bw: num(r.bw), bwRead: num(r.bwRead), bwWrite: num(r.bwWrite), latMean: num(r.latMean), latP95: num(r.latP95), latP99: num(r.latP99), latMax: num(r.latMax) }
-  }, [])
+  const [searchParams] = useSearchParams()
 
   const fetchRuns = useCallback(async () => {
     try {
@@ -82,23 +73,37 @@ export function HistoryPage() {
 
   const openDetail = useCallback(async (id: string) => {
     setSelectedRunId(id)
-    setLogSummary(null)
-    setStatsData([])
+    setReport(null)
+    setReportLoading(true)
+    setDetailError('')
     try {
-      const [detailRes, statsRes] = await Promise.all([fetch(`/api/runs/${id}`), fetch(`/api/runs/${id}/stats`)])
-      if (!detailRes.ok) return
+      const [detailRes, reportRes] = await Promise.all([fetch(`/api/runs/${id}`), fetch(`/api/runs/${id}/report-data`)])
+      if (!detailRes.ok) {
+        setDetail(null)
+        setDetailError(`加载运行详情失败：${detailRes.status} ${detailRes.statusText || 'Request failed'}`)
+        return
+      }
       const data = (await detailRes.json()) as RunDetail
       setDetail(data)
-      if (statsRes.ok) {
-        const statsRaw = (await statsRes.json()) as unknown
-        if (Array.isArray(statsRaw)) {
-          setStatsData(statsRaw.map((x) => normalizeStatsPoint(x)).filter(Boolean) as StatsDataPoint[])
-        }
+      if (reportRes.ok) {
+        setReport((await reportRes.json()) as RunReportDTO)
+      } else {
+        setDetailError(`生成报告失败：${reportRes.status} ${reportRes.statusText || 'Request failed'}`)
       }
     } catch {
-      // ignore
+      setDetail(null)
+      setDetailError('加载运行详情失败：网络错误')
+    } finally {
+      setReportLoading(false)
     }
-  }, [normalizeStatsPoint])
+  }, [])
+
+  useEffect(() => {
+    const requestedRunId = searchParams.get('runId') ?? ''
+    if (!requestedRunId || autoOpenedRunRef.current === requestedRunId) return
+    autoOpenedRunRef.current = requestedRunId
+    openDetail(requestedRunId)
+  }, [openDetail, searchParams])
 
   useEffect(() => {
     fetchRuns()
@@ -124,21 +129,14 @@ export function HistoryPage() {
   const allTags = useMemo(() => Array.from(new Set(runs.flatMap((r) => r.tags ?? []))).sort(), [runs])
   const allTemplateSources = useMemo(() => Array.from(new Set(runs.map((r) => r.template_source ?? 'manual'))).sort(), [runs])
 
-  const fetchLogSummary = useCallback(async () => {
-    if (!detail) return
-    const res = await fetch(`/api/runs/${detail.meta.id}/log-summary`)
-    if (!res.ok) return
-    setLogSummary((await res.json()) as LogSummary)
-  }, [detail])
-
   const restoreToWorkflow = useCallback(() => {
     if (!detail?.config?.tasks?.length) return
     navigate('/', { replace: true, state: { restoreRunConfig: detail.config, restoreRunId: detail.meta.id } })
   }, [detail, navigate])
 
-  const duplicateToLegacy = useCallback(() => {
+  const duplicateToPipeline = useCallback(() => {
     if (!detail?.config?.tasks?.length) return
-    navigate('/legacy', { replace: true, state: { runConfig: detail.config } })
+    navigate('/', { state: { restoreRunConfig: detail.config, restoreRunId: detail.meta.id } })
   }, [detail, navigate])
 
   const saveAsTemplate = useCallback(() => {
@@ -156,16 +154,15 @@ export function HistoryPage() {
 
   const exportReport = useCallback(async () => {
     if (!detail) return
-    const query = new URLSearchParams({ metric: statsTab, timeRange: statsRange }).toString()
-    const res = await fetch(`/api/runs/${detail.meta.id}/report.html?${query}`)
+    const res = await fetch(`/api/runs/${detail.meta.id}/report.html`)
     if (!res.ok) {
-      downloadJson(`run-${detail.meta.id}-report.json`, { meta: detail.meta, stats: statsData, logSummary, config: detail.config })
+      downloadJson(`run-${detail.meta.id}-report.json`, report ?? { meta: detail.meta, config: detail.config })
       return
     }
     const blob = await res.blob()
     const filename = getFileNameFromDisposition(res.headers.get('Content-Disposition'), `run-${detail.meta.id}-report.html`)
     downloadBlob(filename, blob)
-  }, [detail, logSummary, statsData, statsRange, statsTab])
+  }, [detail, report])
 
   const deleteRuns = useCallback(async (ids: string[]) => {
     if (!ids.length) return
@@ -180,12 +177,13 @@ export function HistoryPage() {
   }, [fetchRuns, selectedRunId])
 
   const onAction = useCallback((action: HistoryAction) => {
+    if (action === 'open-monitor' && detail) navigate(`/monitor?runId=${detail.meta.id}`)
     if (action === 'restore-workflow') restoreToWorkflow()
-    if (action === 'duplicate' || action === 'rerun') duplicateToLegacy()
+    if (action === 'duplicate' || action === 'rerun') duplicateToPipeline()
     if (action === 'save-template') saveAsTemplate()
     if (action === 'export-report') exportReport()
     if (action === 'delete' && detail) deleteRuns([detail.meta.id])
-  }, [deleteRuns, detail, duplicateToLegacy, exportReport, restoreToWorkflow, saveAsTemplate])
+  }, [deleteRuns, detail, duplicateToPipeline, exportReport, navigate, restoreToWorkflow, saveAsTemplate])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -223,13 +221,14 @@ export function HistoryPage() {
   if (loading) return <div className="flex items-center justify-center py-12"><p className="text-muted-foreground">加载中...</p></div>
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <h2 className="text-lg font-semibold text-foreground flex items-center gap-2"><History className="h-5 w-5" />历史任务</h2>
-        <p className="text-sm text-muted-foreground">快捷键：Ctrl/Cmd+K 搜索，Ctrl/Cmd+Enter 复制运行，Ctrl/Cmd+E 导出，Delete 删除。</p>
-      </div>
-      <div className="grid grid-cols-1 gap-4 2xl:grid-cols-12">
-        <div className="2xl:col-span-5">
+    <div className="min-h-full bg-workbench">
+      <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 lg:px-6">
+        <div className="flex h-8 w-8 items-center justify-center bg-foreground text-background"><History className="h-4 w-4" /></div>
+        <div className="min-w-0 flex-1"><h1 className="text-base font-semibold">运行与报告</h1><p className="text-[11px] text-muted-foreground">每次运行的配置、性能采样、日志和报告保存在同一记录下。</p></div>
+        <div className="flex items-center gap-2 border-l border-border pl-4 text-xs"><FileChartColumn className="h-4 w-4 text-primary" /><span><strong className="font-mono text-base">{runs.length}</strong><small className="ml-1 text-muted-foreground">runs</small></span></div>
+      </header>
+      <div className="grid grid-cols-1 xl:grid-cols-12">
+        <div className={`${selectedRunId ? 'order-2' : 'order-1'} xl:order-1 xl:col-span-4`}>
           <RunsListPanel
             searchInputRef={searchInputRef}
             runs={filteredRuns}
@@ -240,6 +239,7 @@ export function HistoryPage() {
             allTemplateSources={allTemplateSources}
             onFilterChange={(patch) => setFilters((prev) => ({ ...prev, ...patch }))}
             onSelectRun={openDetail}
+            onOpenMonitor={(id) => navigate(`/monitor?runId=${id}`)}
             onToggleSelect={(id, checked) => setSelectedRunIds((prev) => checked ? Array.from(new Set([...prev, id])) : prev.filter((x) => x !== id))}
             onToggleSelectAll={(checked) => setSelectedRunIds(checked ? filteredRuns.map((r) => r.id) : [])}
             onBatchDelete={() => deleteRuns(selectedRunIds)}
@@ -248,11 +248,8 @@ export function HistoryPage() {
             formatBytes={formatBytes}
           />
         </div>
-        <div className="2xl:col-span-4">
-          <RunDetailPanel detail={detail} statsData={statsData} statsTab={statsTab} statsRange={statsRange} onStatsTabChange={setStatsTab} onStatsRangeChange={setStatsRange} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
-        </div>
-        <div className="2xl:col-span-3">
-          <ArtifactsPanel detail={detail} logSummary={logSummary} onFetchLogSummary={fetchLogSummary} onExportReport={exportReport} />
+        <div className={`${selectedRunId ? 'order-1' : 'order-2'} border-t border-border xl:order-2 xl:col-span-8 xl:border-l xl:border-t-0`}>
+          <RunDetailPanel key={selectedRunId ?? 'empty'} detail={detail} report={report} loading={reportLoading} detailError={detailError} onAction={onAction} statusColor={statusColor} formatBytes={formatBytes} />
         </div>
       </div>
     </div>
