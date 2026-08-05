@@ -20,3 +20,30 @@ func TestFilterStatsPoints_LimitKeepsNewest(t *testing.T) {
 		t.Fatalf("expected newest points [3,4], got %+v", filtered)
 	}
 }
+
+func TestNormalizeStatsTimeline_PreservesSamplesAcrossTaskReset(t *testing.T) {
+	points := []StatsDataPoint{{Time: 1}, {Time: 2}, {Time: 3}, {Time: 1}, {Time: 2}, {Time: 3}}
+	normalized := NormalizeStatsTimeline(points)
+
+	want := []int64{1, 2, 3, 4, 5, 6}
+	if len(normalized) != len(want) {
+		t.Fatalf("expected %d points, got %d", len(want), len(normalized))
+	}
+	for i, point := range normalized {
+		if point.Time != want[i] {
+			t.Fatalf("point %d time = %d, want %d", i, point.Time, want[i])
+		}
+	}
+}
+
+func TestNormalizeStatsTimeline_PreservesDuplicateSamples(t *testing.T) {
+	points := []StatsDataPoint{{Time: 1}, {Time: 2}, {Time: 2}, {Time: 3}}
+	normalized := NormalizeStatsTimeline(points)
+
+	want := []int64{1, 2, 2, 3}
+	for i, point := range normalized {
+		if point.Time != want[i] {
+			t.Fatalf("point %d time = %d, want %d", i, point.Time, want[i])
+		}
+	}
+}

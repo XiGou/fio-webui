@@ -37,6 +37,38 @@ type StatsDataPoint struct {
 	LatMax    float64 `json:"latMax"`  // ms
 }
 
+// NormalizeStatsTimeline preserves sample order when fio restarts its local
+// elapsed clock for a later task in the same run.
+func NormalizeStatsTimeline(points []StatsDataPoint) []StatsDataPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	normalized := make([]StatsDataPoint, len(points))
+	copy(normalized, points)
+
+	previousRaw := points[0].Time
+	lastTime := previousRaw
+	sampleStep := int64(0)
+	for i := 1; i < len(points); i++ {
+		raw := points[i].Time
+		delta := raw - previousRaw
+		if delta > 0 {
+			lastTime += delta
+			if sampleStep == 0 || delta < sampleStep {
+				sampleStep = delta
+			}
+		} else if delta < 0 {
+			if sampleStep <= 0 {
+				sampleStep = 1
+			}
+			lastTime += sampleStep
+		}
+		normalized[i].Time = lastTime
+		previousRaw = raw
+	}
+	return normalized
+}
+
 // StatusToStatsDataPoint aggregates a StatusUpdate into a single StatsDataPoint.
 // The logic mirrors the frontend's convertStatusToDataPoint helper to keep
 // values consistent between historical API data and live WebSocket updates.

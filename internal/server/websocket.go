@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/gouxi/fio-webui/internal/fio"
 )
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -69,12 +68,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			sendMsg(SSEMessage{Type: "output", Data: line})
 
-		case status := <-s.executor.GetStatusChan():
-			// Send real-time aggregated stats updates (same shape as /api/stats)
-			if status != nil {
-				if point := fio.StatusToStatsDataPoint(status); point != nil {
-					sendMsg(SSEMessage{Type: "stats", Data: point})
-				}
+		case point := <-s.executor.GetStatsChan():
+			if point != nil {
+				sendMsg(SSEMessage{Type: "stats", Data: point})
 			}
 		}
 

@@ -3,21 +3,35 @@ import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import type { StatsDataPoint } from '@/types/api'
 import { describeMetricPresentation } from '@/lib/statsFormat'
+import { getNormalizedTimeline, type ChartDomain } from '@/lib/chartRanges'
 
 interface StatsChartProps {
   data: StatsDataPoint[]
   title: string
   type: 'iops' | 'bw' | 'lat'
   height?: number
-  xDomain?: { min: number; max: number } | null
-  onDomainChange?: (domain: { min: number; max: number }) => void
+  xDomain?: ChartDomain | null
+  followLatest?: boolean
+  onUserDomainChange?: (domain: ChartDomain) => void
 }
 
-export function StatsChart({ data, title, type, height = 300, xDomain, onDomainChange }: StatsChartProps) {
+function formatTimeTick(value: number, current: number, followLatest: boolean): string {
+  if (!followLatest) return `${Number(value).toFixed(0)}s`
+  const age = current - value
+  if (Math.abs(age) < 0.5) return '现在'
+  return `-${Math.max(0, age).toFixed(age < 10 ? 1 : 0).replace(/\.0$/, '')}s`
+}
+
+export function StatsChart({ data, title, type, height = 300, xDomain, followLatest = false, onUserDomainChange }: StatsChartProps) {
   const chartRef = useRef<HTMLDivElement>(null)
   const plotRef = useRef<uPlot | null>(null)
+  const domainCallbackRef = useRef(onUserDomainChange)
   const [width, setWidth] = useState(800)
-  const prevTypeRef = useRef<string | null>(null)
+  const prevChartRef = useRef<{ type: string; title: string; followLatest: boolean } | null>(null)
+
+  useEffect(() => {
+    domainCallbackRef.current = onUserDomainChange
+  }, [onUserDomainChange])
 
   // Update width when container resizes (e.g. when Status panel opens)
   useEffect(() => {
@@ -47,28 +61,16 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
       return
     }
 
-    // Prepare uplot data format: [times, ...series]
-    // Backend normalizes time to seconds; use first point as t=0 (relative seconds)
-    let times = data.map((d) => d.time)
-    // Ensure strictly increasing (uPlot requirement)
-    let last = -Infinity
-    times = times.map((t) => {
-      if (t <= last) last = last + 0.001
-      else last = t
-      return last
-    })
-    // Relative time: first point = 0s
-    const t0 = times[0]
-    times = times.map((t) => t - t0)
+    const times = getNormalizedTimeline(data)
 
     let series: uPlot.Series[] = []
     let rawValues: number[][] = []
 
     if (type === 'iops') {
       series = [
-        { label: 'Total', stroke: '#2563eb', width: 2 },
-        { label: 'Read', stroke: '#10b981', width: 2 },
-        { label: 'Write', stroke: '#f59e0b', width: 2 },
+        { label: 'Total', stroke: '#29323d', width: 2 },
+        { label: 'Read', stroke: '#0b8198', width: 2 },
+        { label: 'Write', stroke: '#c56b05', width: 2 },
       ]
       rawValues = [
         data.map((d) => d.iops),
@@ -77,9 +79,9 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
       ]
     } else if (type === 'bw') {
       series = [
-        { label: 'Total', stroke: '#2563eb', width: 2 },
-        { label: 'Read', stroke: '#10b981', width: 2 },
-        { label: 'Write', stroke: '#f59e0b', width: 2 },
+        { label: 'Total', stroke: '#29323d', width: 2 },
+        { label: 'Read', stroke: '#0b8198', width: 2 },
+        { label: 'Write', stroke: '#c56b05', width: 2 },
       ]
       rawValues = [
         data.map((d) => d.bw),
@@ -88,10 +90,10 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
       ]
     } else if (type === 'lat') {
       series = [
-        { label: 'Mean', stroke: '#2563eb', width: 2 },
-        { label: 'P95', stroke: '#f59e0b', width: 2 },
-        { label: 'P99', stroke: '#ef4444', width: 2 },
-        { label: 'Max', stroke: '#8b5cf6', width: 2 },
+        { label: 'Mean', stroke: '#157a5b', width: 2 },
+        { label: 'P95', stroke: '#0b8198', width: 2 },
+        { label: 'P99', stroke: '#c56b05', width: 2 },
+        { label: 'Max', stroke: '#b83232', width: 2 },
       ]
       rawValues = [
         data.map((d) => d.latMean),
@@ -129,9 +131,13 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
       ],
       axes: [
         {
-          label: 'Elapsed (s)',
+          label: followLatest ? '距当前' : 'Elapsed (s)',
           stroke: '#666',
           grid: { show: true, stroke: '#e5e7eb', width: 1 },
+          values: (plot, splits) => {
+            const current = Number(plot.scales.x.max ?? maxX)
+            return splits.map((split) => formatTimeTick(Number(split), current, followLatest))
+          },
         },
         {
           label: presentation.axisLabel,
@@ -141,12 +147,13 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
         },
       ],
       scales: {
-        x: { min: 0, time: false },
+        x: { min: xDomain?.min ?? 0, max: xDomain?.max ?? Math.max(1, maxX), time: false },
         ...(type === 'lat' && yRangeLat ? { y: { range: yRangeLat } } : {}),
       },
       legend: {
         show: true,
         live: true,
+        isolate: true,
       },
       cursor: {
         show: true,
@@ -159,21 +166,20 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
         },
       },
       hooks: {
-        setScale: [
-          (u, key) => {
-            if (key === 'x' && onDomainChange) {
-              const min = Number(u.scales.x.min ?? 0)
-              const max = Number(u.scales.x.max ?? maxX)
-              onDomainChange({ min, max })
-            }
+        setSelect: [
+          (plot) => {
+            if (plot.select.width <= 0) return
+            const start = plot.posToVal(plot.select.left, 'x')
+            const end = plot.posToVal(plot.select.left + plot.select.width, 'x')
+            domainCallbackRef.current?.({ min: Math.max(0, Math.min(start, end)), max: Math.max(start, end) })
           },
         ],
       },
     }
 
     if (plotRef.current) {
-      if (prevTypeRef.current !== type) {
-        // type 变了，必须销毁重建，否则 series/legend 不会更新
+      if (prevChartRef.current?.type !== type || prevChartRef.current.title !== title || prevChartRef.current.followLatest !== followLatest) {
+        // Metric definitions and the uPlot title are immutable after construction.
         plotRef.current.destroy()
         plotRef.current = null
       } else {
@@ -184,7 +190,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
         plotRef.current.setScale('x', domain)
       }
     }
-    prevTypeRef.current = type
+    prevChartRef.current = { type, title, followLatest }
 
     if (!plotRef.current) {
       plotRef.current = new uPlot(opts, plotData, chartRef.current!)
@@ -192,7 +198,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
         plotRef.current.setScale('x', xDomain)
       }
     }
-  }, [data, type, title, width, height, xDomain, onDomainChange])
+  }, [data, type, title, width, height, xDomain, followLatest])
 
   // Destroy only on unmount
   useEffect(() => {
@@ -206,7 +212,7 @@ export function StatsChart({ data, title, type, height = 300, xDomain, onDomainC
 
   return (
     <div className="w-full">
-      <div ref={chartRef} style={{ width: '100%', height: `${height}px` }} />
+      <div ref={chartRef} className="metric-chart live-chart" style={{ width: '100%', height: `${height + 52}px` }} />
     </div>
   )
 }

@@ -40,12 +40,15 @@ type Executor struct {
 	state        *RunState
 	streamParser *StreamJSONParser
 	outputCh     chan string
-	statusCh     chan *StatusUpdate
+	statsCh      chan *StatsDataPoint
 	cancel       context.CancelFunc
 	cmd          *exec.Cmd
 	WorkDir      string    // scratch for validate etc
 	RunStore     *RunStore // persistent run records
 	lastStats    *StatsDataPoint
+	lastRawTime  int64
+	lastStatTime int64
+	statsStep    int64
 	statsMu      sync.Mutex
 }
 
@@ -60,7 +63,7 @@ func NewExecutor(workDir string, store *RunStore) *Executor {
 		state: &RunState{
 			Status: StatusIdle,
 		},
-		statusCh: make(chan *StatusUpdate, 100),
+		statsCh:  make(chan *StatsDataPoint, 100),
 		outputCh: make(chan string, 100),
 	}
 }
@@ -92,10 +95,19 @@ func (e *Executor) GetOutputChan() <-chan string {
 	return e.outputCh
 }
 
-func (e *Executor) GetStatusChan() <-chan *StatusUpdate {
+func (e *Executor) GetStatsChan() <-chan *StatsDataPoint {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.statusCh
+	return e.statsCh
+}
+
+func (e *Executor) resetStatsTimeline() {
+	e.statsMu.Lock()
+	defer e.statsMu.Unlock()
+	e.lastStats = nil
+	e.lastRawTime = 0
+	e.lastStatTime = 0
+	e.statsStep = 0
 }
 
 // GetCurrentRunID returns the ID of the currently tracked run, if any.
@@ -222,9 +234,8 @@ func (e *Executor) Run(config *FioConfig) (*RunState, error) {
 	e.saveInitialMeta(runID, startTime, nil)
 
 	e.outputCh = make(chan string, 100)
-	if e.statusCh == nil {
-		e.statusCh = make(chan *StatusUpdate, 100)
-	}
+	e.statsCh = make(chan *StatsDataPoint, 100)
+	e.resetStatsTimeline()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
@@ -284,9 +295,8 @@ func (e *Executor) RunTasks(tasks []FioTask, metadata *RunMetadata) (*RunState, 
 	e.saveInitialMeta(runID, startTime, metadata)
 
 	e.outputCh = make(chan string, 100)
-	if e.statusCh == nil {
-		e.statusCh = make(chan *StatusUpdate, 100)
-	}
+	e.statsCh = make(chan *StatsDataPoint, 100)
+	e.resetStatsTimeline()
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
 	e.mu.Unlock()
@@ -515,18 +525,15 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 	// aggregated metrics for historical queries.
 	go func(curRunID string) {
 		for status := range e.streamParser.StatusChan() {
-			// Convert to aggregated stats point and append to history file.
 			if point := StatusToStatsDataPoint(status); point != nil {
-				e.appendStatsPoint(curRunID, point)
-			}
-
-			// Forward raw status update for real-time WebSocket consumers.
-			select {
-			case e.statusCh <- status:
-			case <-ctx.Done():
-				return
-			default:
-				// Channel full, skip
+				point = e.appendStatsPoint(curRunID, point)
+				select {
+				case e.statsCh <- point:
+				case <-ctx.Done():
+					return
+				default:
+					// Channel full, skip
+				}
 			}
 		}
 	}(runID)
@@ -587,27 +594,47 @@ func (e *Executor) runFio(ctx context.Context, config *FioConfig, jobFile, runID
 }
 
 // appendStatsPoint appends a single StatsDataPoint to the run's stats file.
-func (e *Executor) appendStatsPoint(runID string, point *StatsDataPoint) {
+func (e *Executor) appendStatsPoint(runID string, point *StatsDataPoint) *StatsDataPoint {
 	if runID == "" || point == nil {
-		return
+		return nil
 	}
 	e.statsMu.Lock()
-	e.lastStats = point
+	normalized := *point
+	rawTime := point.Time
+	if e.lastStats == nil {
+		e.lastStatTime = rawTime
+	} else {
+		delta := rawTime - e.lastRawTime
+		if delta > 0 {
+			e.lastStatTime += delta
+			if e.statsStep == 0 || delta < e.statsStep {
+				e.statsStep = delta
+			}
+		} else if delta < 0 {
+			if e.statsStep <= 0 {
+				e.statsStep = 1
+			}
+			e.lastStatTime += e.statsStep
+		}
+	}
+	e.lastRawTime = rawTime
+	normalized.Time = e.lastStatTime
+	e.lastStats = &normalized
 	e.statsMu.Unlock()
 
-	data, err := json.Marshal(point)
+	data, err := json.Marshal(&normalized)
 	if err != nil {
 		if Debug {
 			log.Printf("[DEBUG] Failed to marshal stats point: %v", err)
 		}
-		return
+		return &normalized
 	}
 
 	if e.RunStore != nil {
 		if err := e.RunStore.AppendStatsLine(runID, data); err != nil && Debug {
 			log.Printf("[DEBUG] AppendStatsLine: %v", err)
 		}
-		return
+		return &normalized
 	}
 
 	// Fallback: write to WorkDir (legacy)
@@ -618,10 +645,11 @@ func (e *Executor) appendStatsPoint(runID string, point *StatsDataPoint) {
 		if Debug {
 			log.Printf("[DEBUG] Failed to open stats file %s: %v", filename, err)
 		}
-		return
+		return &normalized
 	}
 	defer f.Close()
 	f.Write(append(data, '\n'))
+	return &normalized
 }
 
 // GetStatsHistory reads the aggregated stats history for the given run ID.
@@ -650,7 +678,7 @@ func (e *Executor) GetStatsHistory(runID string) ([]StatsDataPoint, error) {
 		}
 		points = append(points, p)
 	}
-	return points, scanner.Err()
+	return NormalizeStatsTimeline(points), scanner.Err()
 }
 
 type ValidationError struct {

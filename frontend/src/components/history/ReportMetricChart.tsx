@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
+import { getVisibleYDomain } from '@/lib/chartRanges'
 import { describeMetricPresentation } from '@/lib/statsFormat'
 import type { ReportSeriesPoint, ReportStageBoundary } from '@/types/api'
 
@@ -55,6 +56,34 @@ function stageMarkerPlugin(stages: ReportStageBoundary[]): uPlot.Plugin {
             ctx.setLineDash([4, 4])
           })
           ctx.restore()
+        },
+      ],
+    },
+  }
+}
+
+function visibleSeriesScalePlugin(data: uPlot.AlignedData): uPlot.Plugin {
+  let queued = false
+  return {
+    hooks: {
+      setSeries: [
+        (plot, _seriesIndex, options) => {
+          if (options.show == null || queued) return
+          queued = true
+          queueMicrotask(() => {
+            queued = false
+            const xDomain = {
+              min: Number(plot.scales.x.min ?? 0),
+              max: Number(plot.scales.x.max ?? 1),
+            }
+            const domain = getVisibleYDomain(
+              data[0] as ArrayLike<number>,
+              data.slice(1) as ArrayLike<number | null | undefined>[],
+              plot.series.slice(1).map((series) => series.show !== false),
+              xDomain,
+            )
+            plot.setScale('y', domain)
+          })
         },
       ],
     },
@@ -153,8 +182,8 @@ export function ReportMetricChart({ data, stages, type, height = 260, xDomain, o
         drag: { x: true, y: false, setScale: true },
         focus: { prox: 24 },
       },
-      legend: { show: true, live: true },
-      plugins: [stageMarkerPlugin(stages)],
+      legend: { show: true, live: true, isolate: true },
+      plugins: [stageMarkerPlugin(stages), visibleSeriesScalePlugin(prepared.plotData)],
       hooks: {
         setScale: [
           (plot, key) => {
@@ -190,5 +219,5 @@ export function ReportMetricChart({ data, stages, type, height = 260, xDomain, o
     return <div className="flex h-56 items-center justify-center text-sm text-muted-foreground">没有可绘制的 fio task 日志。</div>
   }
 
-  return <div ref={containerRef} className="report-chart min-w-0 overflow-hidden" style={{ height }} />
+  return <div ref={containerRef} className="metric-chart report-chart min-w-0 overflow-hidden" style={{ height }} />
 }

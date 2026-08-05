@@ -299,7 +299,6 @@ func (s *RunStore) GetStats(runID string) ([]StatsDataPoint, error) {
 		return nil, err
 	}
 	var points []StatsDataPoint
-	pointIndex := make(map[int64]int)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -309,14 +308,9 @@ func (s *RunStore) GetStats(runID string) ([]StatsDataPoint, error) {
 		if err := json.Unmarshal([]byte(line), &p); err != nil {
 			continue
 		}
-		if index, exists := pointIndex[p.Time]; exists {
-			points[index] = p
-			continue
-		}
-		pointIndex[p.Time] = len(points)
 		points = append(points, p)
 	}
-	return points, nil
+	return NormalizeStatsTimeline(points), nil
 }
 
 // parseFioJSONSummary extracts key stats from fio JSON output
