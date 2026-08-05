@@ -94,6 +94,7 @@ func TestFioConfigToINI_EnablesMeanAndHistogramLatencyLogs(t *testing.T) {
 		"log_hist_msec=500\n",
 		"write_lat_log=/tmp/task0\n",
 		"write_hist_log=/tmp/task0\n",
+		"per_job_logs=1\n",
 	} {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("expected %q in jobfile, got:\n%s", expected, got)
@@ -101,5 +102,19 @@ func TestFioConfigToINI_EnablesMeanAndHistogramLatencyLogs(t *testing.T) {
 	}
 	if strings.Contains(got, "log_max_value") {
 		t.Fatalf("did not expect log_max_value in jobfile, got:\n%s", got)
+	}
+}
+
+func TestFioConfigToINI_DisablesGroupReportingForMultiJobStatus(t *testing.T) {
+	t.Parallel()
+	cfg := &FioConfig{
+		Global: DefaultGlobalConfig(),
+		Jobs:   []JobConfig{DefaultJobConfig(), DefaultJobConfig()},
+	}
+	cfg.Global.GroupReport = true
+
+	got := cfg.ToINI("/tmp/task0", -1)
+	if strings.Contains(got, "group_reporting\n") {
+		t.Fatalf("multi-job jobfile must preserve per-job status identity, got:\n%s", got)
 	}
 }

@@ -51,7 +51,7 @@
     .metric:last-child { border-right: 0; }
     .metric h2 { margin: 0; font-size: 12px; }
     .metric dl { display: grid; margin: 12px 0 0; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .metric.iops dl, .metric.bw dl { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metric.iops dl, .metric.bw dl { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     dt { color: var(--muted-foreground); font-size: 9px; }
     dd { margin: 4px 0 0; font: 700 17px ui-monospace, SFMono-Regular, Menlo, monospace; }
     .metric.latency dd { font-size: 14px; }
@@ -69,7 +69,23 @@
     .stage-name { display: block; margin-top: 3px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .stage-meta { display: block; margin-top: 3px; color: var(--muted-foreground); font-size: 10px; }
 
+    .job-section { border-bottom: 1px solid var(--border); padding: 14px 16px; }
+    .job-table-wrap { margin-top: 10px; overflow-x: auto; border: 1px solid var(--border); }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; text-align: left; font-size: 10px; }
+    th { background: var(--muted); color: var(--muted-foreground); font-weight: 600; }
+    th, td { border-bottom: 1px solid var(--border); padding: 8px 10px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td:not(:first-child) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .job-name { display: block; font-size: 11px; }
+    .job-stage { color: var(--muted-foreground); font-size: 9px; }
+
     .charts { display: grid; gap: 14px; background: var(--workbench); padding: 16px; }
+    .chart-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; border: 1px solid var(--border); background: var(--surface); padding: 8px 10px; }
+    .control-group { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .control-label { margin-right: 2px; color: var(--muted-foreground); font-size: 10px; font-weight: 600; }
+    .control-option { display: inline-flex; min-height: 28px; cursor: pointer; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--background); padding: 4px 8px; font-size: 10px; font-weight: 600; }
+    .control-option:has(input:checked) { border-color: hsl(162 40% 60%); background: hsl(164 28% 91%); color: hsl(164 65% 19%); }
+    .control-option input { width: 14px; height: 14px; accent-color: var(--primary); }
     .chart-panel { min-width: 0; border: 1px solid var(--border); background: var(--surface); }
     .chart-head { display: flex; min-height: 40px; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); padding: 7px 11px; }
     .chart-head h2 { margin: 0; font-size: 12px; }
@@ -138,6 +154,11 @@
       <div class="metric latency"><h2>完成延迟</h2><dl id="lat-summary"></dl></div>
     </section>
 
+    <section class="job-section" id="job-section">
+      <h2 class="section-title">Job 性能明细</h2>
+      <div class="job-table-wrap"><table><thead><tr><th>Job</th><th>IOPS MEAN R / W</th><th>IOPS MAX R / W</th><th>BW MEAN R / W</th><th>P99 LAT R / W</th></tr></thead><tbody id="job-table-body"></tbody></table></div>
+    </section>
+
     <section class="timeline-section">
       <h2 class="section-title">节点时间带</h2>
       <p class="section-note">图中的竖线标记每个节点在 fio task 日志时间轴上的起点。</p>
@@ -145,6 +166,7 @@
     </section>
 
     <section class="charts">
+      <div class="chart-controls" id="chart-controls"></div>
       <article class="chart-panel">
         <header class="chart-head"><h2>IOPS</h2><span class="chart-stats" id="iops-stats"></span></header>
         <div class="chart" id="iops-chart"></div>
@@ -181,7 +203,20 @@
     const report = JSON.parse("__REPORT_DATA__");
     const generatedEpoch = Number("__REPORT_GENERATED_AT__") * 1000;
     const colors = { primary: '#157a5b', live: '#0b8198', warning: '#c56b05', destructive: '#b83232', graphite: '#29323d', grid: '#d7dde2', muted: '#65707c' };
+    const jobColors = [
+      { read: '#0b8198', write: '#c56b05' },
+      { read: '#157a5b', write: '#b83232' },
+      { read: '#3267a8', write: '#9a6718' },
+      { read: '#5d6f3b', write: '#a14c68' },
+      { read: '#536f8d', write: '#8a5d31' },
+    ];
     const plots = [];
+    const reportJobs = report.job_series && report.job_series.length
+      ? report.job_series.map((job) => ({ key: job.key, name: job.name, stageIndex: job.stage_index, series: job }))
+      : [{ key: '__aggregate__', name: '全部 Job', stageIndex: -1, series: null }];
+    const selectedJobs = new Set(reportJobs.map((job) => job.key));
+    const selectedDirections = new Set(['read', 'write']);
+    const selectedLatencyStatistics = new Set(['mean', 'p99', 'max']);
 
     const text = (id, value) => { document.getElementById(id).textContent = value; };
     const compact = (value) => {
@@ -264,16 +299,111 @@
 
     function renderSummary() {
       const summary = report.summary || {};
-      appendDefinition(document.getElementById('iops-summary'), 'MEAN', metricValue('iops', summary.mean_iops));
-      appendDefinition(document.getElementById('iops-summary'), 'MAX', metricValue('iops', summary.peak_iops));
-      appendDefinition(document.getElementById('bw-summary'), 'MEAN', metricValue('bw', summary.mean_bandwidth_mib));
-      appendDefinition(document.getElementById('bw-summary'), 'MAX', metricValue('bw', summary.peak_bandwidth_mib));
-      appendDefinition(document.getElementById('lat-summary'), 'MEAN', metricValue('lat', summary.mean_latency_ms));
-      appendDefinition(document.getElementById('lat-summary'), 'P99', metricValue('lat', summary.p99_latency_ms), 'p99');
-      appendDefinition(document.getElementById('lat-summary'), 'MAX', metricValue('lat', summary.peak_latency_ms), 'max');
+      appendDefinition(document.getElementById('iops-summary'), 'MEAN R', metricValue('iops', summary.mean_iops_read));
+      appendDefinition(document.getElementById('iops-summary'), 'MEAN W', metricValue('iops', summary.mean_iops_write));
+      appendDefinition(document.getElementById('iops-summary'), 'MAX R', metricValue('iops', summary.peak_iops_read));
+      appendDefinition(document.getElementById('iops-summary'), 'MAX W', metricValue('iops', summary.peak_iops_write));
+      appendDefinition(document.getElementById('bw-summary'), 'MEAN R', metricValue('bw', summary.mean_bandwidth_read_mib));
+      appendDefinition(document.getElementById('bw-summary'), 'MEAN W', metricValue('bw', summary.mean_bandwidth_write_mib));
+      appendDefinition(document.getElementById('bw-summary'), 'MAX R', metricValue('bw', summary.peak_bandwidth_read_mib));
+      appendDefinition(document.getElementById('bw-summary'), 'MAX W', metricValue('bw', summary.peak_bandwidth_write_mib));
+      appendDefinition(document.getElementById('lat-summary'), 'MEAN R', metricValue('lat', summary.mean_latency_read_ms));
+      appendDefinition(document.getElementById('lat-summary'), 'MEAN W', metricValue('lat', summary.mean_latency_write_ms));
+      appendDefinition(document.getElementById('lat-summary'), 'P99 R', metricValue('lat', summary.p99_latency_read_ms), 'p99');
+      appendDefinition(document.getElementById('lat-summary'), 'P99 W', metricValue('lat', summary.p99_latency_write_ms), 'p99');
+      appendDefinition(document.getElementById('lat-summary'), 'MAX R', metricValue('lat', summary.peak_latency_read_ms), 'max');
+      appendDefinition(document.getElementById('lat-summary'), 'MAX W', metricValue('lat', summary.peak_latency_write_ms), 'max');
       text('iops-stats', `MEAN ${metricValue('iops', summary.mean_iops)} · MAX ${metricValue('iops', summary.peak_iops)}`);
       text('bw-stats', `MEAN ${metricValue('bw', summary.mean_bandwidth_mib)} · MAX ${metricValue('bw', summary.peak_bandwidth_mib)}`);
       text('lat-stats', `MEAN ${metricValue('lat', summary.mean_latency_ms)} · P99 ${metricValue('lat', summary.p99_latency_ms)} · MAX ${metricValue('lat', summary.peak_latency_ms)}`);
+    }
+
+    function renderJobs() {
+      const section = document.getElementById('job-section');
+      const body = document.getElementById('job-table-body');
+      const series = report.job_series || [];
+      if (!series.length) {
+        section.style.display = 'none';
+        return;
+      }
+      series.forEach((job) => {
+        const summary = job.summary || {};
+        const row = document.createElement('tr');
+        const identity = document.createElement('td');
+        const name = document.createElement('strong');
+        name.className = 'job-name';
+        name.textContent = job.name;
+        const stage = document.createElement('span');
+        stage.className = 'job-stage';
+        stage.textContent = `OP ${Number(job.stage_index) + 1} · ${job.stage_name}`;
+        identity.append(name, stage);
+        const values = [
+          `${metricValue('iops', summary.mean_iops_read)} / ${metricValue('iops', summary.mean_iops_write)}`,
+          `${metricValue('iops', summary.peak_iops_read)} / ${metricValue('iops', summary.peak_iops_write)}`,
+          `${metricValue('bw', summary.mean_bandwidth_read_mib)} / ${metricValue('bw', summary.mean_bandwidth_write_mib)}`,
+          `${metricValue('lat', summary.p99_latency_read_ms)} / ${metricValue('lat', summary.p99_latency_write_ms)}`,
+        ];
+        row.append(identity, ...values.map((value) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          return cell;
+        }));
+        body.append(row);
+      });
+    }
+
+    function toggleSet(set, value, input) {
+      if (set.has(value)) {
+        if (set.size === 1) {
+          input.checked = true;
+          return;
+        }
+        set.delete(value);
+      } else {
+        set.add(value);
+      }
+      renderCharts();
+    }
+
+    function controlOption(label, checked, onChange) {
+      const option = document.createElement('label');
+      option.className = 'control-option';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = checked;
+      input.addEventListener('change', () => onChange(input));
+      const textNode = document.createElement('span');
+      textNode.textContent = label;
+      option.append(input, textNode);
+      return option;
+    }
+
+    function renderControls() {
+      const root = document.getElementById('chart-controls');
+      const addGroup = (label, options) => {
+        const group = document.createElement('div');
+        group.className = 'control-group';
+        const title = document.createElement('span');
+        title.className = 'control-label';
+        title.textContent = label;
+        group.append(title, ...options);
+        root.append(group);
+      };
+      addGroup('Job', reportJobs.map((job) => controlOption(
+        job.stageIndex >= 0 ? `OP ${job.stageIndex + 1} · ${job.name}` : job.name,
+        selectedJobs.has(job.key),
+        (input) => toggleSet(selectedJobs, job.key, input),
+      )));
+      addGroup('方向', ['read', 'write'].map((direction) => controlOption(
+        direction === 'read' ? '读' : '写',
+        selectedDirections.has(direction),
+        (input) => toggleSet(selectedDirections, direction, input),
+      )));
+      addGroup('延迟统计', ['mean', 'p99', 'max'].map((statistic) => controlOption(
+        statistic.toUpperCase(),
+        selectedLatencyStatistics.has(statistic),
+        (input) => toggleSet(selectedLatencyStatistics, statistic, input),
+      )));
     }
 
     function renderTimeline() {
@@ -328,6 +458,83 @@
       }] } };
     }
 
+    function visibleSeriesScalePlugin(aligned) {
+      let queued = false;
+      return { hooks: { setSeries: [(plot, _seriesIndex, options) => {
+        if (options.show == null || queued) return;
+        queued = true;
+        queueMicrotask(() => {
+          queued = false;
+          const minX = Number(plot.scales.x.min || 0);
+          const maxX = Number(plot.scales.x.max || 1);
+          const times = aligned[0];
+          let peak = 0;
+          aligned.slice(1).forEach((values, index) => {
+            if (plot.series[index + 1].show === false) return;
+            values.forEach((value, pointIndex) => {
+              const time = Number(times[pointIndex]);
+              const number = Number(value);
+              if (time >= minX && time <= maxX && Number.isFinite(number)) peak = Math.max(peak, number);
+            });
+          });
+          plot.setScale('y', { min: 0, max: Math.max(1, peak * 1.08) });
+        });
+      }] } };
+    }
+
+    function reportPointKey(value) {
+      return Number(value).toFixed(6);
+    }
+
+    function buildDefinitions(type, points) {
+      const directions = [...selectedDirections];
+      const statistics = [...selectedLatencyStatistics];
+      return reportJobs.filter((job) => selectedJobs.has(job.key)).flatMap((job, selectedIndex) => {
+        const pair = jobColors[selectedIndex % jobColors.length];
+        const source = job.series ? job.series.points || [] : points;
+        const byTime = new Map(source.map((point) => [reportPointKey(point.time), point]));
+        const at = (time) => byTime.get(reportPointKey(time));
+        const prefix = job.stageIndex >= 0 ? `OP ${String(job.stageIndex + 1).padStart(2, '0')} · ${job.name}` : job.name;
+        if (type !== 'lat') {
+          return directions.map((direction) => ({
+            label: `${prefix} · ${direction === 'read' ? '读' : '写'}`,
+            color: pair[direction],
+            width: 1.8,
+            dash: direction === 'write' ? [8, 4] : undefined,
+            values: points.map((timelinePoint) => {
+              const point = at(timelinePoint.time);
+              if (!point) return null;
+              if (type === 'iops') return direction === 'read' ? point.iopsRead || 0 : point.iopsWrite || 0;
+              return direction === 'read' ? point.bwRead || 0 : point.bwWrite || 0;
+            }),
+          }));
+        }
+        if (!job.series) {
+          return statistics.map((statistic) => ({
+            label: `${prefix} · ${statistic.toUpperCase()}`,
+            color: pair.read,
+            width: statistic === 'mean' ? 1.8 : 1.5,
+            dash: statistic === 'p99' ? [8, 4] : statistic === 'max' ? [2, 4] : undefined,
+            values: points.map((point) => statistic === 'mean' ? point.latMean || 0 : statistic === 'p99' ? point.latP99 || 0 : point.latMax || 0),
+          }));
+        }
+        return directions.flatMap((direction) => statistics.map((statistic) => ({
+          label: `${prefix} · ${direction === 'read' ? '读' : '写'} ${statistic.toUpperCase()}`,
+          color: pair[direction],
+          width: statistic === 'mean' ? 1.8 : 1.5,
+          dash: statistic === 'p99' ? [8, 4] : statistic === 'max' ? [2, 4] : undefined,
+          values: points.map((timelinePoint) => {
+            const point = at(timelinePoint.time);
+            if (!point) return null;
+            const suffix = direction === 'read' ? 'Read' : 'Write';
+            if (statistic === 'mean') return point[`latMean${suffix}`] || 0;
+            if (statistic === 'p99') return point[`latP99${suffix}`] || 0;
+            return point[`latMax${suffix}`] || 0;
+          }),
+        })));
+      });
+    }
+
     function createChart(type, elementId) {
       const root = document.getElementById(elementId);
       const points = report.series || [];
@@ -336,20 +543,10 @@
         root.textContent = '没有可绘制的 fio task 日志。';
         return;
       }
-      const definitions = type === 'lat'
-        ? [
-            ['Mean', colors.primary, points.map((point) => point.latMean || 0)],
-            ['P99', colors.warning, points.map((point) => point.latP99 || 0)],
-            ['Max', colors.destructive, points.map((point) => point.latMax || 0)],
-          ]
-        : [
-            ['Total', colors.graphite, points.map((point) => type === 'iops' ? point.iops || 0 : point.bw || 0)],
-            ['Read', colors.live, points.map((point) => type === 'iops' ? point.iopsRead || 0 : point.bwRead || 0)],
-            ['Write', colors.warning, points.map((point) => type === 'iops' ? point.iopsWrite || 0 : point.bwWrite || 0)],
-          ];
-      const descriptor = metricDescriptor(type, definitions.flatMap((definition) => definition[2]));
+      const definitions = buildDefinitions(type, points);
+      const descriptor = metricDescriptor(type, definitions.flatMap((definition) => definition.values.filter((value) => value != null)));
       const times = points.map((point) => point.time);
-      const aligned = [times, ...definitions.map((definition) => definition[2].map(descriptor.transform))];
+      const aligned = [times, ...definitions.map((definition) => definition.values.map((value) => value == null ? null : descriptor.transform(value)))];
       const maxX = Math.max(1, times[times.length - 1] || 1);
       const options = {
         width: Math.max(320, root.clientWidth - 16),
@@ -358,9 +555,10 @@
         series: [
           { label: 'Elapsed' },
           ...definitions.map((definition) => ({
-            label: `${definition[0]} (${descriptor.unit})`,
-            stroke: definition[1],
-            width: definition[0] === 'Total' ? 2 : 1.5,
+            label: `${definition.label} (${descriptor.unit})`,
+            stroke: definition.color,
+            width: definition.width,
+            dash: definition.dash,
             value: (_plot, value) => value == null ? '-' : `${compact(value)} ${descriptor.unit}`,
           })),
         ],
@@ -373,10 +571,23 @@
         ],
         scales: { x: { min: 0, max: maxX, time: false }, y: { range: (_plot, _min, max) => [0, Math.max(1, max * 1.08)] } },
         cursor: { drag: { x: true, y: false, setScale: true }, focus: { prox: 24 } },
-        legend: { show: true, live: true },
-        plugins: [stagePlugin()],
+        legend: { show: true, live: true, isolate: true },
+        plugins: [stagePlugin(), visibleSeriesScalePlugin(aligned)],
       };
       plots.push(new uPlot(options, aligned, root));
+    }
+
+    function renderCharts() {
+      plots.forEach((plot) => plot.destroy());
+      plots.length = 0;
+      ['iops-chart', 'bw-chart', 'lat-chart'].forEach((id) => {
+        const root = document.getElementById(id);
+        root.textContent = '';
+        root.className = 'chart';
+      });
+      createChart('iops', 'iops-chart');
+      createChart('bw', 'bw-chart');
+      createChart('lat', 'lat-chart');
     }
 
     function renderEvidence() {
@@ -396,11 +607,11 @@
 
     renderHeader();
     renderSummary();
+    renderJobs();
     renderTimeline();
     renderEvidence();
-    createChart('iops', 'iops-chart');
-    createChart('bw', 'bw-chart');
-    createChart('lat', 'lat-chart');
+    renderControls();
+    renderCharts();
 
     const resizeObserver = new ResizeObserver(() => {
       plots.forEach((plot) => {

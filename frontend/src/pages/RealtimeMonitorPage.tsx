@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, ArrowLeft, CircleStop, FileChartColumn, Radio, RefreshCw, Server, Terminal, Timer, Wifi, WifiOff } from 'lucide-react'
+import { Activity, ArrowLeft, CircleStop, Clock3, FileChartColumn, LocateFixed, Radio, RefreshCw, Server, Terminal, Timer, Wifi, WifiOff } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StatsChart } from '@/components/StatsChart'
-import { filterStatsByTimeRange } from '@/lib/statsFormat'
+import { MetricSeriesControls } from '@/components/MetricSeriesControls'
+import { DEFAULT_LIVE_TIME_WINDOW, getLiveChartDomain, type ChartDomain, type LiveTimeWindow } from '@/lib/chartRanges'
+import { getLiveMetricJobs, type LatencyStatistic, type MetricDirection } from '@/lib/metricSeries'
 import { cn } from '@/lib/utils'
-import type { FioTaskList, LogSummary, RunRecord, RunState, StatsDataPoint, WsMessage } from '@/types/api'
+import type { FioTaskList, JobStatsDataPoint, LogSummary, RunRecord, RunState, StatsDataPoint, WsMessage } from '@/types/api'
 
 const STATUS_LABEL: Record<string, string> = {
   idle: '空闲',
@@ -46,8 +48,26 @@ function normalizeStatsPoint(raw: unknown): StatsDataPoint | null {
     const next = Number(value)
     return Number.isFinite(next) ? next : 0
   }
+  const normalizeJob = (value: unknown): JobStatsDataPoint | null => {
+    if (!value || typeof value !== 'object') return null
+    const job = value as Record<string, unknown>
+    const name = typeof job.name === 'string' ? job.name : ''
+    if (!name) return null
+    const stageIndex = num(job.stageIndex)
+    return {
+      key: typeof job.key === 'string' && job.key ? job.key : `${stageIndex}:${name}`,
+      name,
+      stageIndex,
+      iops: num(job.iops), iopsRead: num(job.iopsRead), iopsWrite: num(job.iopsWrite),
+      bw: num(job.bw), bwRead: num(job.bwRead), bwWrite: num(job.bwWrite),
+      latMean: num(job.latMean), latP95: num(job.latP95), latP99: num(job.latP99), latMax: num(job.latMax),
+      latMeanRead: num(job.latMeanRead), latP95Read: num(job.latP95Read), latP99Read: num(job.latP99Read), latMaxRead: num(job.latMaxRead),
+      latMeanWrite: num(job.latMeanWrite), latP95Write: num(job.latP95Write), latP99Write: num(job.latP99Write), latMaxWrite: num(job.latMaxWrite),
+    }
+  }
   return {
     time,
+    stageIndex: num(record.stageIndex),
     iops: num(record.iops),
     iopsRead: num(record.iopsRead),
     iopsWrite: num(record.iopsWrite),
@@ -58,6 +78,15 @@ function normalizeStatsPoint(raw: unknown): StatsDataPoint | null {
     latP95: num(record.latP95),
     latP99: num(record.latP99),
     latMax: num(record.latMax),
+    latMeanRead: num(record.latMeanRead),
+    latP95Read: num(record.latP95Read),
+    latP99Read: num(record.latP99Read),
+    latMaxRead: num(record.latMaxRead),
+    latMeanWrite: num(record.latMeanWrite),
+    latP95Write: num(record.latP95Write),
+    latP99Write: num(record.latP99Write),
+    latMaxWrite: num(record.latMaxWrite),
+    jobs: Array.isArray(record.jobs) ? record.jobs.map(normalizeJob).filter(Boolean) as JobStatsDataPoint[] : [],
   }
 }
 
@@ -76,20 +105,26 @@ export function RealtimeMonitorPage() {
   const [loadError, setLoadError] = useState('')
   const [wsStatus, setWsStatus] = useState<WsStatus>('closed')
   const [statsTab, setStatsTab] = useState<'iops' | 'bw' | 'lat'>('iops')
-  const [timeRange, setTimeRange] = useState<'15m' | '1h' | '6h' | '24h' | 'all'>('all')
-  const [xDomain, setXDomain] = useState<{ min: number; max: number } | null>(null)
+  const [timeRange, setTimeRange] = useState<LiveTimeWindow>(DEFAULT_LIVE_TIME_WINDOW)
+  const [isFollowing, setIsFollowing] = useState(true)
+  const [xDomain, setXDomain] = useState<ChartDomain | null>(null)
+  const [selectedJobKeys, setSelectedJobKeys] = useState<string[]>([])
+  const [directions, setDirections] = useState<MetricDirection[]>(['read', 'write'])
+  const [latencyStatistics, setLatencyStatistics] = useState<LatencyStatistic[]>(['mean', 'p99'])
 
   const selectedRunIdRef = useRef(selectedRunId)
   const runStateRef = useRef<RunState | null>(runState)
   const mountedRef = useRef(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const consoleEndRef = useRef<HTMLDivElement>(null)
+  const lastLiveStatsAtRef = useRef(0)
+  const statsRefreshInFlightRef = useRef(false)
+  const consoleScrollRef = useRef<HTMLDivElement>(null)
+  const previousMetricJobKeysRef = useRef<string[]>([])
 
   useEffect(() => {
-    if (consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
+    const consoleElement = consoleScrollRef.current
+    if (consoleElement) consoleElement.scrollTop = consoleElement.scrollHeight
   }, [realtimeLogs])
 
   useEffect(() => {
@@ -101,6 +136,12 @@ export function RealtimeMonitorPage() {
   }, [runState])
 
   const syncSelectedRunId = useCallback((runId: string) => {
+    lastLiveStatsAtRef.current = 0
+    setIsFollowing(true)
+    setXDomain(null)
+    setStatsData([])
+    setSelectedJobKeys([])
+    previousMetricJobKeysRef.current = []
     setSelectedRunId(runId)
     selectedRunIdRef.current = runId
     setSearchParams((prev) => {
@@ -191,10 +232,24 @@ export function RealtimeMonitorPage() {
     }
   }, [])
 
+  const fetchRunStats = useCallback(async (runId: string) => {
+    if (!runId || statsRefreshInFlightRef.current) return
+    statsRefreshInFlightRef.current = true
+    try {
+      const response = await fetch(`/api/runs/${runId}/stats`)
+      if (!response.ok || selectedRunIdRef.current !== runId) return
+      const raw = (await response.json()) as unknown
+      if (!Array.isArray(raw) || selectedRunIdRef.current !== runId) return
+      setStatsData(raw.map(normalizeStatsPoint).filter(Boolean) as StatsDataPoint[])
+    } catch {
+      // WebSocket remains the primary path; the next interval retries the snapshot.
+    } finally {
+      statsRefreshInFlightRef.current = false
+    }
+  }, [])
+
   useEffect(() => {
     mountedRef.current = true
-    // These async loaders update state only after their network requests resolve.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRuns()
     fetchStatus()
     const timer = window.setInterval(() => {
@@ -209,15 +264,26 @@ export function RealtimeMonitorPage() {
 
   const selectedRun = useMemo(() => runs.find((item) => item.id === selectedRunId) ?? null, [runs, selectedRunId])
   const isSelectedRunning = selectedRun?.status === 'running' || runState?.id === selectedRunId && runState.status === 'running'
-  const visibleStatsData = useMemo(() => filterStatsByTimeRange(statsData, timeRange), [statsData, timeRange])
+  const liveDomain = useMemo(() => getLiveChartDomain(statsData, timeRange), [statsData, timeRange])
+  const activeDomain = isFollowing ? liveDomain : xDomain ?? liveDomain
   const runningRuns = useMemo(() => runs.filter((item) => item.status === 'running'), [runs])
+  const metricJobs = useMemo(() => getLiveMetricJobs(statsData), [statsData])
+
+  useEffect(() => {
+    const nextKeys = metricJobs.map((job) => job.key)
+    const previousKeys = previousMetricJobKeysRef.current
+    setSelectedJobKeys((current) => {
+      const wasShowingAll = current.length === 0 || previousKeys.length === 0 || previousKeys.every((key) => current.includes(key))
+      if (wasShowingAll) return nextKeys
+      const valid = current.filter((key) => nextKeys.includes(key))
+      return valid.length ? valid : nextKeys.slice(0, 1)
+    })
+    previousMetricJobKeysRef.current = nextKeys
+  }, [metricJobs])
 
   useEffect(() => {
     if (!selectedRunId) return
-    // The snapshot loader updates state asynchronously after the request resolves.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRunSnapshot(selectedRunId)
-    setXDomain(null)
   }, [fetchRunSnapshot, selectedRunId])
 
   useEffect(() => {
@@ -227,6 +293,16 @@ export function RealtimeMonitorPage() {
     }, 5000)
     return () => window.clearInterval(timer)
   }, [fetchRunSnapshot, isSelectedRunning, selectedRunId])
+
+  useEffect(() => {
+    if (!selectedRunId || !isSelectedRunning) return
+    const refreshIfStale = () => {
+      if (Date.now() - lastLiveStatsAtRef.current >= 2500) fetchRunStats(selectedRunId)
+    }
+    refreshIfStale()
+    const timer = window.setInterval(refreshIfStale, 1000)
+    return () => window.clearInterval(timer)
+  }, [fetchRunStats, isSelectedRunning, selectedRunId])
 
   useEffect(() => {
     let backoff = 1000
@@ -285,6 +361,7 @@ export function RealtimeMonitorPage() {
           if (msg.type === 'stats' && selectedRunIdRef.current && runStateRef.current?.id === selectedRunIdRef.current) {
             const point = normalizeStatsPoint(msg.data)
             if (!point) return
+            lastLiveStatsAtRef.current = Date.now()
             setStatsData((prev) => {
               const last = prev[prev.length - 1]
               if (last && last.time === point.time) {
@@ -342,6 +419,32 @@ export function RealtimeMonitorPage() {
     syncSelectedRunId(runId)
   }
 
+  const selectTimeRange = (range: LiveTimeWindow) => {
+    setTimeRange(range)
+    setIsFollowing(true)
+    setXDomain(null)
+  }
+
+  const showLatest = () => {
+    setIsFollowing(true)
+    setXDomain(null)
+  }
+
+  const inspectDomain = useCallback((domain: ChartDomain) => {
+    setXDomain(domain)
+    setIsFollowing(false)
+  }, [])
+
+  const toggleJob = (key: string) => setSelectedJobKeys((current) => current.includes(key)
+    ? current.length > 1 ? current.filter((item) => item !== key) : current
+    : [...current, key])
+  const toggleDirection = (direction: MetricDirection) => setDirections((current) => current.includes(direction)
+    ? current.length > 1 ? current.filter((item) => item !== direction) : current
+    : [...current, direction])
+  const toggleLatencyStatistic = (statistic: LatencyStatistic) => setLatencyStatistics((current) => current.includes(statistic)
+    ? current.length > 1 ? current.filter((item) => item !== statistic) : current
+    : [...current, statistic])
+
   const stop = async () => {
     await fetch('/api/stop', { method: 'POST' }).catch(() => {})
     await fetchRuns()
@@ -353,7 +456,7 @@ export function RealtimeMonitorPage() {
 
   const activeStatus = runDetail?.meta.status || selectedRun?.status || runState?.status || 'idle'
   const activeError = runDetail?.meta.error || (runState?.id === selectedRunId ? runState.error : '') || '-'
-  const latest = visibleStatsData[visibleStatsData.length - 1]
+  const latest = statsData[statsData.length - 1]
   return (
     <div className="min-h-full bg-background">
       <header className="flex min-h-16 flex-wrap items-center gap-3 border-b border-border px-4 py-2 lg:px-6">
@@ -393,8 +496,8 @@ export function RealtimeMonitorPage() {
         {[
           { label: 'IOPS', value: latest ? latest.iops.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '-', meta: `R ${latest?.iopsRead.toFixed(0) ?? '-'} / W ${latest?.iopsWrite.toFixed(0) ?? '-'}`, icon: Activity },
           { label: '带宽', value: latest ? `${latest.bw.toFixed(1)} MiB/s` : '-', meta: `R ${latest?.bwRead.toFixed(1) ?? '-'} / W ${latest?.bwWrite.toFixed(1) ?? '-'}`, icon: Radio },
-          { label: 'P95 延迟', value: latest ? `${latest.latP95.toFixed(2)} ms` : '-', meta: `mean ${latest?.latMean.toFixed(2) ?? '-'} ms`, icon: Timer },
-          { label: '数据来源', value: isSelectedRunning ? 'fio stdout' : 'stats.jsonl', meta: `${visibleStatsData.length} samples · ${runningRuns.length} active`, icon: Server },
+          { label: 'P99 延迟', value: latest ? `${latest.latP99.toFixed(2)} ms` : '-', meta: `R ${latest?.latP99Read.toFixed(2) ?? '-'} / W ${latest?.latP99Write.toFixed(2) ?? '-'} ms`, icon: Timer },
+          { label: '数据来源', value: isSelectedRunning ? 'fio stdout' : 'stats.jsonl', meta: `${statsData.length} samples · ${runningRuns.length} active`, icon: Server },
         ].map(({ label, value, meta, icon: Icon }) => (
           <div key={label} className="flex min-h-24 items-center gap-3 border-b border-border px-5 py-4 sm:border-r xl:border-b-0">
             <Icon className="h-4 w-4 text-muted-foreground" />
@@ -409,23 +512,57 @@ export function RealtimeMonitorPage() {
             <div className="flex border border-border bg-muted/50 p-0.5" role="tablist" aria-label="性能指标">
               {(['iops', 'bw', 'lat'] as const).map((key) => <button key={key} className={cn('h-7 min-w-14 px-2 text-[11px] font-semibold uppercase', statsTab === key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')} type="button" role="tab" aria-selected={statsTab === key} onClick={() => setStatsTab(key)}>{key}</button>)}
             </div>
-            <div className="flex border border-border bg-muted/50 p-0.5">
-              {(['15m', '1h', '6h', '24h', 'all'] as const).map((range) => <button key={range} className={cn('h-7 min-w-10 px-2 text-[10px] font-semibold uppercase', timeRange === range ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')} type="button" onClick={() => { setTimeRange(range); setXDomain(null) }}>{range}</button>)}
+            <div className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-muted-foreground"><Clock3 className="h-3.5 w-3.5" />时间窗</span>
+              <div className="flex border border-border bg-muted/50 p-0.5" role="group" aria-label="图表时间窗口">
+                {(['30s', '1m', '5m', '15m', 'all'] as const).map((range) => <button key={range} className={cn('h-7 min-w-10 px-2 text-[10px] font-semibold uppercase', timeRange === range ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')} type="button" aria-pressed={timeRange === range} onClick={() => selectTimeRange(range)}>{range === 'all' ? '全部' : range}</button>)}
+              </div>
             </div>
+            <span className={cn('flex h-7 items-center gap-1.5 border px-2 text-[10px] font-semibold', isFollowing ? 'border-cyan-200 bg-cyan-50 text-cyan-800' : 'border-border bg-muted text-muted-foreground')}><span className={cn('h-1.5 w-1.5 rounded-full', isFollowing ? 'bg-cyan-600' : 'bg-muted-foreground')} />{isFollowing ? '跟随最新' : '查看历史'}</span>
+            {!isFollowing ? <Button size="sm" variant="outline" onClick={showLatest}><LocateFixed />回到最新</Button> : null}
             <Button className="ml-auto" size="sm" variant="ghost" onClick={() => selectedRunId && fetchRunSnapshot(selectedRunId)}><RefreshCw />刷新</Button>
           </div>
-          {visibleStatsData.length > 0 ? <StatsChart data={visibleStatsData} title={`${statsTab.toUpperCase()} · ${selectedRunId.slice(0, 8)}`} type={statsTab} height={420} xDomain={xDomain} onDomainChange={setXDomain} /> : <div className="flex h-[420px] flex-col items-center justify-center border border-dashed border-border text-center"><Activity className="mb-3 h-6 w-6 text-muted-foreground" /><p className="text-sm font-medium">等待性能采样</p><p className="mt-1 text-xs text-muted-foreground">运行开始后，fio status 数据会写入这里。</p></div>}
+          <div className="mb-3">
+            <MetricSeriesControls
+              jobs={metricJobs}
+              selectedJobKeys={selectedJobKeys}
+              directions={directions}
+              latencyStatistics={latencyStatistics}
+              showLatencyStatistics={statsTab === 'lat'}
+              onToggleJob={toggleJob}
+              onToggleDirection={toggleDirection}
+              onToggleLatencyStatistic={toggleLatencyStatistic}
+            />
+          </div>
+          {statsData.length > 0 ? <StatsChart data={statsData} title={`${statsTab.toUpperCase()} · ${selectedRunId.slice(0, 8)}`} type={statsTab} height={420} xDomain={activeDomain} followLatest={isFollowing} onUserDomainChange={inspectDomain} jobs={metricJobs} selectedJobKeys={selectedJobKeys} directions={directions} latencyStatistics={latencyStatistics} /> : <div className="flex h-[420px] flex-col items-center justify-center border border-dashed border-border text-center"><Activity className="mb-3 h-6 w-6 text-muted-foreground" /><p className="text-sm font-medium">等待性能采样</p><p className="mt-1 text-xs text-muted-foreground">运行开始后，fio status 数据会写入这里。</p></div>}
         </section>
 
         <aside className="space-y-5 p-4 lg:p-5">
           <section>
             <h2 className="mb-3 text-xs font-semibold">运行证据</h2>
             <dl className="grid grid-cols-[78px_1fr] gap-x-3 gap-y-2 text-xs">
-              <dt className="text-muted-foreground">采集模式</dt><dd>{isSelectedRunning ? 'WebSocket 实时流' : '持久化快照'}</dd>
+              <dt className="text-muted-foreground">采集模式</dt><dd>{isSelectedRunning ? 'WebSocket + 轮询兜底' : '持久化快照'}</dd>
               <dt className="text-muted-foreground">开始</dt><dd>{formatTime(runDetail?.meta.start_time || selectedRun?.start_time)}</dd>
               <dt className="text-muted-foreground">结束</dt><dd>{formatTime(runDetail?.meta.end_time || selectedRun?.end_time)}</dd>
               <dt className="text-muted-foreground">错误</dt><dd className={activeError === '-' ? 'text-muted-foreground' : 'text-destructive'}>{activeError}</dd>
             </dl>
+          </section>
+          <section className="border-t border-border pt-4">
+            <h2 className="mb-2 text-xs font-semibold">Job 实时数据</h2>
+            {latest?.jobs?.length ? (
+              <div className="divide-y divide-border border border-border">
+                {latest.jobs.map((job) => (
+                  <div key={job.key} className="px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2"><strong className="truncate text-xs">{job.name}</strong><span className="font-mono text-[9px] text-muted-foreground">OP {job.stageIndex + 1}</span></div>
+                    <dl className="mt-2 grid grid-cols-[56px_1fr_1fr] gap-x-2 gap-y-1 font-mono text-[9px] tabular-nums">
+                      <dt className="text-muted-foreground">IOPS</dt><dd>R {job.iopsRead.toFixed(0)}</dd><dd>W {job.iopsWrite.toFixed(0)}</dd>
+                      <dt className="text-muted-foreground">BW</dt><dd>R {job.bwRead.toFixed(1)}</dd><dd>W {job.bwWrite.toFixed(1)} MiB/s</dd>
+                      <dt className="text-muted-foreground">P99</dt><dd>R {job.latP99Read.toFixed(2)}</dd><dd>W {job.latP99Write.toFixed(2)} ms</dd>
+                    </dl>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-xs text-muted-foreground">旧运行仅包含聚合指标。</p>}
           </section>
           <section className="border-t border-border pt-4">
             <h2 className="mb-2 text-xs font-semibold">日志摘要</h2>
@@ -438,8 +575,8 @@ export function RealtimeMonitorPage() {
 
       <section className="border-t border-border bg-[#111714] text-[#d7e3dc]">
         <header className="flex h-11 items-center justify-between border-b border-white/10 px-4 lg:px-6"><h2 className="flex items-center gap-2 font-mono text-xs font-semibold"><Terminal className="h-4 w-4 text-emerald-400" />FIO STDOUT</h2><div className="flex items-center gap-3 text-[10px] text-[#92a49a]"><span>{realtimeLogs.length} lines</span><Button variant="ghost" size="sm" className="text-[#b9c7bf] hover:bg-white/10 hover:text-white" onClick={() => setRealtimeLogs([])}>清空</Button></div></header>
-        <div className="h-64 overflow-auto px-4 py-3 font-mono text-[10px] leading-5 lg:px-6">
-          {realtimeLogs.length ? <>{realtimeLogs.map((line, index) => <div key={`${index}-${line.slice(0, 12)}`} className="whitespace-pre-wrap"><span className="mr-3 select-none text-[#5f7167]">{String(index + 1).padStart(4, '0')}</span>{line}</div>)}<div ref={consoleEndRef} /></> : <p className="text-[#71847a]">等待 fio 输出...</p>}
+        <div ref={consoleScrollRef} className="h-64 overflow-auto px-4 py-3 font-mono text-[10px] leading-5 lg:px-6">
+          {realtimeLogs.length ? realtimeLogs.map((line, index) => <div key={`${index}-${line.slice(0, 12)}`} className="whitespace-pre-wrap"><span className="mr-3 select-none text-[#5f7167]">{String(index + 1).padStart(4, '0')}</span>{line}</div>) : <p className="text-[#71847a]">等待 fio 输出...</p>}
         </div>
       </section>
     </div>

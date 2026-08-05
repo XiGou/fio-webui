@@ -183,3 +183,63 @@ func TestBuildRunReport_UsesTaskLogsAndMarksStageBoundaries(t *testing.T) {
 		t.Fatalf("unexpected report summary: %#v", report.Summary)
 	}
 }
+
+func TestBuildRunReport_SeparatesPerJobDirectionalSeries(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewRunStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunStore() error = %v", err)
+	}
+	const runID = "per-job-log-report"
+	if _, err := store.EnsureRunDir(runID); err != nil {
+		t.Fatalf("EnsureRunDir() error = %v", err)
+	}
+	if err := store.SaveMeta(runID, &RunMeta{ID: runID, Status: "finished", StartTime: "2026-08-05T08:00:00Z"}); err != nil {
+		t.Fatalf("SaveMeta() error = %v", err)
+	}
+	global := DefaultGlobalConfig()
+	global.Runtime = 1
+	global.LogAvgMsec = 500
+	if err := store.SaveConfig(runID, &RunConfig{TaskList: &FioTaskList{Tasks: []FioTask{{
+		Name: "混合负载", Global: global,
+		Jobs: []JobConfig{{Name: "reader", NumJobs: 1}, {Name: "writer", NumJobs: 1}},
+	}}}}); err != nil {
+		t.Fatalf("SaveConfig() error = %v", err)
+	}
+
+	files := map[string]string{
+		"task0_iops.1.log": "500, 100, 0, 4096, 0\n1000, 120, 0, 4096, 0\n",
+		"task0_bw.1.log":   "500, 1024, 0, 4096, 0\n1000, 2048, 0, 4096, 0\n",
+		"task0_lat.1.log":  "500, 200000, 0, 4096, 0\n1000, 400000, 0, 4096, 0\n",
+		"task0_iops.2.log": "500, 70, 1, 4096, 0\n1000, 80, 1, 4096, 0\n",
+		"task0_bw.2.log":   "500, 3072, 1, 4096, 0\n1000, 4096, 1, 4096, 0\n",
+		"task0_lat.2.log":  "500, 800000, 1, 4096, 0\n1000, 1200000, 1, 4096, 0\n",
+	}
+	for name, contents := range files {
+		if err := os.WriteFile(filepath.Join(store.RunDir(runID), name), []byte(contents), 0644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+
+	report, err := store.BuildRunReport(runID, nil)
+	if err != nil {
+		t.Fatalf("BuildRunReport() error = %v", err)
+	}
+	if len(report.JobSeries) != 2 {
+		t.Fatalf("JobSeries length = %d, want 2: %#v", len(report.JobSeries), report.JobSeries)
+	}
+	reader, writer := report.JobSeries[0], report.JobSeries[1]
+	if reader.Key != "0:reader" || reader.Points[0].IOPSRead != 100 || reader.Points[0].IOPSWrite != 0 || reader.Points[0].LatMeanRead != 0.2 {
+		t.Fatalf("unexpected reader series: %#v", reader)
+	}
+	if writer.Key != "0:writer" || writer.Points[0].IOPSWrite != 70 || writer.Points[0].IOPSRead != 0 || writer.Points[0].LatMeanWrite != 0.8 {
+		t.Fatalf("unexpected writer series: %#v", writer)
+	}
+	if report.Series[0].IOPS != 170 || report.Series[0].BWRead != 1 || report.Series[0].BWWrite != 3 {
+		t.Fatalf("unexpected aggregate point: %#v", report.Series[0])
+	}
+	if report.Source.LatencyMode != "window-log-fallback" {
+		t.Fatalf("LatencyMode = %q, want window-log-fallback", report.Source.LatencyMode)
+	}
+}

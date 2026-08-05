@@ -79,7 +79,7 @@ func DefaultGlobalConfig() GlobalConfig {
 		Direct:         true,
 		Runtime:        60,
 		TimeBased:      true,
-		GroupReport:    true,
+		GroupReport:    false,
 		LogAvgMsec:     500,
 		StatusInterval: 1,      // 1 second status updates
 		OutputFormat:   "json", // JSON format for status updates
@@ -115,7 +115,9 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 	if c.Global.TimeBased {
 		sb.WriteString("time_based\n")
 	}
-	if c.Global.GroupReport {
+	// fio collapses multi-job status JSON under the first job when group_reporting
+	// is enabled, which destroys the identity needed by live per-job charts.
+	if c.Global.GroupReport && (jobIndex >= 0 || len(c.Jobs) <= 1) {
 		sb.WriteString("group_reporting\n")
 	}
 	if c.Global.LogAvgMsec > 0 {
@@ -132,7 +134,7 @@ func (c *FioConfig) ToINI(logPrefix string, jobIndex int) string {
 		sb.WriteString(fmt.Sprintf("write_iops_log=%s\n", logPrefix))
 		sb.WriteString(fmt.Sprintf("write_lat_log=%s\n", logPrefix))
 		sb.WriteString(fmt.Sprintf("write_hist_log=%s\n", logPrefix))
-		sb.WriteString("per_job_logs=0\n")
+		sb.WriteString("per_job_logs=1\n")
 	}
 
 	// If jobIndex is -1, generate all jobs with stonewall

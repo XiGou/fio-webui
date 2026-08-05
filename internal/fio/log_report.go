@@ -12,17 +12,33 @@ import (
 )
 
 type ReportSeriesPoint struct {
-	Time       float64 `json:"time"`
-	StageIndex int     `json:"stage_index"`
-	IOPS       float64 `json:"iops"`
-	IOPSRead   float64 `json:"iopsRead"`
-	IOPSWrite  float64 `json:"iopsWrite"`
-	BW         float64 `json:"bw"`
-	BWRead     float64 `json:"bwRead"`
-	BWWrite    float64 `json:"bwWrite"`
-	LatMean    float64 `json:"latMean"`
-	LatP99     float64 `json:"latP99"`
-	LatMax     float64 `json:"latMax"`
+	Time         float64 `json:"time"`
+	StageIndex   int     `json:"stage_index"`
+	IOPS         float64 `json:"iops"`
+	IOPSRead     float64 `json:"iopsRead"`
+	IOPSWrite    float64 `json:"iopsWrite"`
+	BW           float64 `json:"bw"`
+	BWRead       float64 `json:"bwRead"`
+	BWWrite      float64 `json:"bwWrite"`
+	LatMean      float64 `json:"latMean"`
+	LatP99       float64 `json:"latP99"`
+	LatMax       float64 `json:"latMax"`
+	LatMeanRead  float64 `json:"latMeanRead"`
+	LatP99Read   float64 `json:"latP99Read"`
+	LatMaxRead   float64 `json:"latMaxRead"`
+	LatMeanWrite float64 `json:"latMeanWrite"`
+	LatP99Write  float64 `json:"latP99Write"`
+	LatMaxWrite  float64 `json:"latMaxWrite"`
+}
+
+type ReportJobSeries struct {
+	Key        string              `json:"key"`
+	Name       string              `json:"name"`
+	StageIndex int                 `json:"stage_index"`
+	StageName  string              `json:"stage_name"`
+	JobIndex   int                 `json:"job_index"`
+	Points     []ReportSeriesPoint `json:"points"`
+	Summary    *ReportSummary      `json:"summary"`
 }
 
 type ReportStageBoundary struct {
@@ -42,6 +58,7 @@ type ReportDataSource struct {
 
 type fioLogReport struct {
 	Points             []ReportSeriesPoint
+	JobSeries          []ReportJobSeries
 	Stages             []ReportStageBoundary
 	Source             ReportDataSource
 	AggregateHistogram []uint64
@@ -50,8 +67,8 @@ type fioLogReport struct {
 type reportPointAccumulator struct {
 	point         ReportSeriesPoint
 	hasThroughput bool
-	latencyValues []float64
-	histogram     []uint64
+	latencyValues [2][]float64
+	histogram     [2][]uint64
 }
 
 func normalizeLogTimestamp(timestamp, interval int64) int64 {
@@ -125,18 +142,23 @@ func parseHistogramLog(path string, interval int64, points map[int64]*reportPoin
 		if err != nil {
 			continue
 		}
+		// Histogram logs use: timestamp, direction, block-size, buckets...
+		direction, err := strconv.Atoi(strings.TrimSpace(columns[1]))
+		if err != nil || direction < 0 || direction > 1 {
+			continue
+		}
 		accumulator := ensureReportAccumulator(points, normalizeLogTimestamp(timestamp, interval))
 		bucketCount := len(columns) - 3
-		if len(accumulator.histogram) == 0 {
-			accumulator.histogram = make([]uint64, bucketCount)
+		if len(accumulator.histogram[direction]) == 0 {
+			accumulator.histogram[direction] = make([]uint64, bucketCount)
 		}
-		if len(accumulator.histogram) != bucketCount {
+		if len(accumulator.histogram[direction]) != bucketCount {
 			continue
 		}
 		for index, raw := range columns[3:] {
 			count, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 64)
 			if err == nil {
-				accumulator.histogram[index] += count
+				accumulator.histogram[direction][index] += count
 			}
 		}
 	}
@@ -255,6 +277,250 @@ func mergeHistogram(target []uint64, source []uint64) []uint64 {
 	return target
 }
 
+func summarizeLatencyValues(values []float64) (mean, p99, max float64) {
+	if len(values) == 0 {
+		return 0, 0, 0
+	}
+	for _, value := range values {
+		mean += value
+		if value > max {
+			max = value
+		}
+	}
+	return mean / float64(len(values)), percentile(values, 0.99), max
+}
+
+func setDirectionalReportLatency(point *ReportSeriesPoint, direction int, mean, p99, max float64) {
+	if direction == 0 {
+		point.LatMeanRead, point.LatP99Read, point.LatMaxRead = mean, p99, max
+	} else {
+		point.LatMeanWrite, point.LatP99Write, point.LatMaxWrite = mean, p99, max
+	}
+}
+
+func finalizeReportLatency(accumulator *reportPointAccumulator, aggregateHistogram *[]uint64) (hasHistogram, usedFallback bool) {
+	combinedHistogram := []uint64(nil)
+	directionCount := 0.0
+	for direction := 0; direction <= 1; direction++ {
+		var mean, p99, max float64
+		if len(accumulator.histogram[direction]) > 0 {
+			hasHistogram = true
+			mean, p99, max = summarizeHistogram(accumulator.histogram[direction])
+			combinedHistogram = mergeHistogram(combinedHistogram, accumulator.histogram[direction])
+		} else if len(accumulator.latencyValues[direction]) > 0 {
+			usedFallback = true
+			mean, p99, max = summarizeLatencyValues(accumulator.latencyValues[direction])
+		}
+		setDirectionalReportLatency(&accumulator.point, direction, mean, p99, max)
+		if mean > 0 || p99 > 0 || max > 0 {
+			accumulator.point.LatMean += mean
+			if p99 > accumulator.point.LatP99 {
+				accumulator.point.LatP99 = p99
+			}
+			if max > accumulator.point.LatMax {
+				accumulator.point.LatMax = max
+			}
+			directionCount++
+		}
+	}
+	if directionCount > 0 {
+		accumulator.point.LatMean /= directionCount
+	}
+	if len(combinedHistogram) > 0 {
+		*aggregateHistogram = mergeHistogram(*aggregateHistogram, combinedHistogram)
+		if !usedFallback {
+			accumulator.point.LatMean, accumulator.point.LatP99, accumulator.point.LatMax = summarizeHistogram(combinedHistogram)
+		}
+	}
+	return hasHistogram, usedFallback
+}
+
+func sortedReportTimestamps(points map[int64]*reportPointAccumulator) []int64 {
+	timestamps := make([]int64, 0, len(points))
+	for timestamp := range points {
+		timestamps = append(timestamps, timestamp)
+	}
+	sort.Slice(timestamps, func(left, right int) bool { return timestamps[left] < timestamps[right] })
+	return timestamps
+}
+
+func buildReportPoints(points map[int64]*reportPointAccumulator, stageIndex int, elapsedMs int64, aggregateHistogram *[]uint64) (series []ReportSeriesPoint, durationMs int64, hasHistogram, usedFallback bool) {
+	for _, timestamp := range sortedReportTimestamps(points) {
+		accumulator := points[timestamp]
+		if timestamp > durationMs {
+			durationMs = timestamp
+		}
+		if !accumulator.hasThroughput {
+			continue
+		}
+		accumulator.point.StageIndex = stageIndex
+		accumulator.point.Time = float64(elapsedMs+timestamp) / 1000
+		hasPointHistogram, usedPointFallback := finalizeReportLatency(accumulator, aggregateHistogram)
+		hasHistogram = hasHistogram || hasPointHistogram
+		usedFallback = usedFallback || usedPointFallback
+		series = append(series, accumulator.point)
+	}
+	return series, durationMs, hasHistogram, usedFallback
+}
+
+func reportJobIndexForOrdinal(jobs []JobConfig, ordinal int) (int, bool) {
+	if ordinal < 1 {
+		return 0, len(jobs) > 0
+	}
+	nextOrdinal := 1
+	for jobIndex, job := range jobs {
+		instances := job.NumJobs
+		if instances < 1 {
+			instances = 1
+		}
+		if ordinal >= nextOrdinal && ordinal < nextOrdinal+instances {
+			return jobIndex, true
+		}
+		nextOrdinal += instances
+	}
+	return 0, false
+}
+
+func reportLogOrdinal(path string) (int, bool) {
+	name := strings.TrimSuffix(filepath.Base(path), ".log")
+	segments := strings.Split(name, ".")
+	if len(segments) < 2 {
+		return 0, false
+	}
+	ordinal, err := strconv.Atoi(segments[len(segments)-1])
+	return ordinal, err == nil
+}
+
+func appendSourceFile(source *ReportDataSource, path string) {
+	name := filepath.Base(path)
+	for _, existing := range source.Files {
+		if existing == name {
+			return
+		}
+	}
+	source.Files = append(source.Files, name)
+}
+
+type reportMetricLog struct {
+	suffix string
+	apply  func(*reportPointAccumulator, float64, int)
+}
+
+func reportMetricLogs() []reportMetricLog {
+	return []reportMetricLog{
+		{suffix: "_iops", apply: func(point *reportPointAccumulator, value float64, direction int) {
+			point.hasThroughput = true
+			point.point.IOPS += value
+			if direction == 0 {
+				point.point.IOPSRead += value
+			} else if direction == 1 {
+				point.point.IOPSWrite += value
+			}
+		}},
+		{suffix: "_bw", apply: func(point *reportPointAccumulator, value float64, direction int) {
+			point.hasThroughput = true
+			value /= 1024
+			point.point.BW += value
+			if direction == 0 {
+				point.point.BWRead += value
+			} else if direction == 1 {
+				point.point.BWWrite += value
+			}
+		}},
+		{suffix: "_lat", apply: func(point *reportPointAccumulator, value float64, direction int) {
+			if direction >= 0 && direction <= 1 {
+				point.latencyValues[direction] = append(point.latencyValues[direction], value/1_000_000)
+			}
+		}},
+	}
+}
+
+func parseAggregateTaskLogs(runDir, prefix string, interval int64, points map[int64]*reportPointAccumulator, source *ReportDataSource) (bool, error) {
+	foundAny := false
+	for _, metric := range reportMetricLogs() {
+		path := filepath.Join(runDir, prefix+metric.suffix+".log")
+		found, err := parseWindowedMetricLog(path, interval, points, metric.apply)
+		if err != nil {
+			return false, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+		}
+		if found {
+			foundAny = true
+			appendSourceFile(source, path)
+		}
+	}
+	histogramPath := filepath.Join(runDir, prefix+"_clat_hist.log")
+	found, err := parseHistogramLog(histogramPath, interval, points)
+	if err != nil {
+		return false, fmt.Errorf("parse %s: %w", filepath.Base(histogramPath), err)
+	}
+	if found {
+		foundAny = true
+		appendSourceFile(source, histogramPath)
+	}
+	return foundAny, nil
+}
+
+func parsePerJobTaskLogs(runDir, prefix string, interval int64, jobs []JobConfig, aggregate map[int64]*reportPointAccumulator, perJob []map[int64]*reportPointAccumulator, source *ReportDataSource) (bool, error) {
+	iopsPattern := filepath.Join(runDir, prefix+"_iops.*.log")
+	iopsFiles, err := filepath.Glob(iopsPattern)
+	if err != nil || len(iopsFiles) == 0 {
+		return false, err
+	}
+
+	parseWindowed := func(path string, points map[int64]*reportPointAccumulator, apply func(*reportPointAccumulator, float64, int)) error {
+		_, parseErr := parseWindowedMetricLog(path, interval, points, apply)
+		return parseErr
+	}
+	for _, metric := range reportMetricLogs() {
+		paths, globErr := filepath.Glob(filepath.Join(runDir, prefix+metric.suffix+".*.log"))
+		if globErr != nil {
+			return false, globErr
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			ordinal, ok := reportLogOrdinal(path)
+			if !ok {
+				continue
+			}
+			jobIndex, ok := reportJobIndexForOrdinal(jobs, ordinal)
+			if !ok {
+				continue
+			}
+			if err := parseWindowed(path, perJob[jobIndex], metric.apply); err != nil {
+				return false, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+			}
+			if err := parseWindowed(path, aggregate, metric.apply); err != nil {
+				return false, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+			}
+			appendSourceFile(source, path)
+		}
+	}
+
+	histogramPaths, globErr := filepath.Glob(filepath.Join(runDir, prefix+"_clat_hist.*.log"))
+	if globErr != nil {
+		return false, globErr
+	}
+	sort.Strings(histogramPaths)
+	for _, path := range histogramPaths {
+		ordinal, ok := reportLogOrdinal(path)
+		if !ok {
+			continue
+		}
+		jobIndex, ok := reportJobIndexForOrdinal(jobs, ordinal)
+		if !ok {
+			continue
+		}
+		if _, err := parseHistogramLog(path, interval, perJob[jobIndex]); err != nil {
+			return false, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+		}
+		if _, err := parseHistogramLog(path, interval, aggregate); err != nil {
+			return false, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
+		}
+		appendSourceFile(source, path)
+	}
+	return true, nil
+}
+
 func (s *RunStore) getFioLogReport(runID string, tasks []FioTask) (*fioLogReport, error) {
 	report := &fioLogReport{Source: ReportDataSource{Kind: "fio-task-logs", LatencyMode: "unavailable"}}
 	runDir := s.RunDir(runID)
@@ -272,95 +538,61 @@ func (s *RunStore) getFioLogReport(runID string, tasks []FioTask) (*fioLogReport
 		}
 
 		points := make(map[int64]*reportPointAccumulator)
+		jobPoints := make([]map[int64]*reportPointAccumulator, len(task.Jobs))
+		for jobIndex := range jobPoints {
+			jobPoints[jobIndex] = make(map[int64]*reportPointAccumulator)
+		}
 		prefix := fmt.Sprintf("task%d", stageIndex)
-		metricFiles := []struct {
-			suffix string
-			apply  func(*reportPointAccumulator, float64, int)
-		}{
-			{suffix: "_iops.log", apply: func(point *reportPointAccumulator, value float64, direction int) {
-				point.hasThroughput = true
-				point.point.IOPS += value
-				if direction == 0 {
-					point.point.IOPSRead += value
-				} else if direction == 1 {
-					point.point.IOPSWrite += value
-				}
-			}},
-			{suffix: "_bw.log", apply: func(point *reportPointAccumulator, value float64, direction int) {
-				point.hasThroughput = true
-				value /= 1024
-				point.point.BW += value
-				if direction == 0 {
-					point.point.BWRead += value
-				} else if direction == 1 {
-					point.point.BWWrite += value
-				}
-			}},
-			{suffix: "_lat.log", apply: func(point *reportPointAccumulator, value float64, _ int) {
-				point.latencyValues = append(point.latencyValues, value/1_000_000)
-			}},
-		}
-
-		for _, metricFile := range metricFiles {
-			path := filepath.Join(runDir, prefix+metricFile.suffix)
-			found, err := parseWindowedMetricLog(path, interval, points, metricFile.apply)
-			if err != nil {
-				return nil, fmt.Errorf("parse %s: %w", filepath.Base(path), err)
-			}
-			if found {
-				report.Source.Files = append(report.Source.Files, filepath.Base(path))
-			}
-		}
-
-		histogramPath := filepath.Join(runDir, prefix+"_clat_hist.log")
-		foundHistogram, err := parseHistogramLog(histogramPath, interval, points)
+		perJobLogs, err := parsePerJobTaskLogs(runDir, prefix, interval, task.Jobs, points, jobPoints, &report.Source)
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", filepath.Base(histogramPath), err)
+			return nil, err
 		}
-		if foundHistogram {
-			hasHistogram = true
-			report.Source.Files = append(report.Source.Files, filepath.Base(histogramPath))
+		if !perJobLogs {
+			if _, err := parseAggregateTaskLogs(runDir, prefix, interval, points, &report.Source); err != nil {
+				return nil, err
+			}
 		}
 
-		timestamps := make([]int64, 0, len(points))
-		for timestamp := range points {
-			timestamps = append(timestamps, timestamp)
-		}
-		sort.Slice(timestamps, func(left, right int) bool { return timestamps[left] < timestamps[right] })
-
-		stageDurationMs := int64(0)
-		for _, timestamp := range timestamps {
-			accumulator := points[timestamp]
-			if timestamp > stageDurationMs {
-				stageDurationMs = timestamp
-			}
-			if !accumulator.hasThroughput {
-				continue
-			}
-			accumulator.point.StageIndex = stageIndex
-			accumulator.point.Time = float64(elapsedMs+timestamp) / 1000
-			if len(accumulator.histogram) > 0 {
-				accumulator.point.LatMean, accumulator.point.LatP99, accumulator.point.LatMax = summarizeHistogram(accumulator.histogram)
-				report.AggregateHistogram = mergeHistogram(report.AggregateHistogram, accumulator.histogram)
-			} else if len(accumulator.latencyValues) > 0 {
-				usedLatencyFallback = true
-				for _, value := range accumulator.latencyValues {
-					accumulator.point.LatMean += value
-					if value > accumulator.point.LatMax {
-						accumulator.point.LatMax = value
-					}
-				}
-				accumulator.point.LatMean /= float64(len(accumulator.latencyValues))
-				accumulator.point.LatP99 = percentile(accumulator.latencyValues, 0.99)
-			}
-			report.Points = append(report.Points, accumulator.point)
-		}
+		stageSeries, stageDurationMs, stageHasHistogram, stageUsedFallback := buildReportPoints(points, stageIndex, elapsedMs, &report.AggregateHistogram)
+		report.Points = append(report.Points, stageSeries...)
+		hasHistogram = hasHistogram || stageHasHistogram
+		usedLatencyFallback = usedLatencyFallback || stageUsedFallback
 		if stageDurationMs == 0 && task.Global.Runtime > 0 {
 			stageDurationMs = int64(task.Global.Runtime) * 1000
 		}
 		stageName := task.Name
 		if strings.TrimSpace(stageName) == "" {
 			stageName = fmt.Sprintf("节点 %d", stageIndex+1)
+		}
+		if perJobLogs {
+			for jobIndex, job := range task.Jobs {
+				jobHistogram := []uint64(nil)
+				series, _, jobHasHistogram, jobUsedFallback := buildReportPoints(jobPoints[jobIndex], stageIndex, elapsedMs, &jobHistogram)
+				if len(series) == 0 {
+					continue
+				}
+				report.JobSeries = append(report.JobSeries, ReportJobSeries{
+					Key:        fmt.Sprintf("%d:%s", stageIndex, job.Name),
+					Name:       job.Name,
+					StageIndex: stageIndex,
+					StageName:  stageName,
+					JobIndex:   jobIndex,
+					Points:     series,
+					Summary:    summarizeReportSeries(series, jobHistogram),
+				})
+				hasHistogram = hasHistogram || jobHasHistogram
+				usedLatencyFallback = usedLatencyFallback || jobUsedFallback
+			}
+		} else if len(task.Jobs) == 1 && len(stageSeries) > 0 {
+			report.JobSeries = append(report.JobSeries, ReportJobSeries{
+				Key:        fmt.Sprintf("%d:%s", stageIndex, task.Jobs[0].Name),
+				Name:       task.Jobs[0].Name,
+				StageIndex: stageIndex,
+				StageName:  stageName,
+				JobIndex:   0,
+				Points:     append([]ReportSeriesPoint(nil), stageSeries...),
+				Summary:    summarizeReportSeries(stageSeries, nil),
+			})
 		}
 		report.Stages = append(report.Stages, ReportStageBoundary{
 			Index:        stageIndex,
@@ -371,6 +603,7 @@ func (s *RunStore) getFioLogReport(runID string, tasks []FioTask) (*fioLogReport
 		})
 		elapsedMs += stageDurationMs
 	}
+	sort.Strings(report.Source.Files)
 
 	if hasHistogram && usedLatencyFallback {
 		report.Source.LatencyMode = "histogram+window-fallback"

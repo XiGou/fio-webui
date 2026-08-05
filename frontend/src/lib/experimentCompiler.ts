@@ -15,7 +15,7 @@ export const DEFAULT_GLOBAL: GlobalConfig = {
   direct: true,
   runtime: 60,
   time_based: true,
-  group_reporting: true,
+  group_reporting: false,
   log_avg_msec: 500,
   status_interval: 1,
   output_format: 'json',
@@ -33,7 +33,7 @@ export const defaultJob = (): ExperimentJob => ({
 
 export const defaultExperiment = (): Experiment => ({
   id: `exp-${uid()}`,
-  name: 'NVMe 基准验证',
+  name: '磁盘性能测试',
   description: '可复用的 fio 测试流水线',
   global: { ...DEFAULT_GLOBAL },
   stages: [defaultStage()],
@@ -177,11 +177,18 @@ export function compileExperimentToTaskList(experiment: Experiment): CompileExpe
       continue
     }
 
+    const resolvedNames = stage.jobs.map((job, index) => job.name.trim() || `job-${index + 1}`)
+    const duplicateNames = [...new Set(resolvedNames.filter((name, index) => resolvedNames.indexOf(name) !== index))]
+    if (duplicateNames.length) {
+      errors.push(`节点 "${stage.name}" 的 Job 名称必须唯一：${duplicateNames.join('、')}。`)
+      continue
+    }
+
     const shared = resolveStageSharedParams(experiment.global, stage.shared)
     const global = buildTaskGlobal(shared)
     const jobs: JobConfig[] = stage.jobs.map((job, idx) => {
       const effective = resolveEffectiveJobParams(experiment.global, stage.shared, job.overrides)
-      return buildResolvedJob(job.name, effective, job.overrides, idx)
+      return buildResolvedJob(resolvedNames[idx], effective, job.overrides, idx)
     })
 
     taskList.tasks.push({

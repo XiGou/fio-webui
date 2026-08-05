@@ -1,7 +1,9 @@
 import { Activity, Copy, FileDown, Play, RotateCcw, Save, Trash2 } from 'lucide-react'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { MetricSeriesControls } from '@/components/MetricSeriesControls'
+import { getReportMetricJobs, type LatencyStatistic, type MetricDirection } from '@/lib/metricSeries'
 import { formatMetricValue } from '@/lib/statsFormat'
 import type { FioTaskList, RunReportDTO } from '@/types/api'
 import { ReportMetricChart } from './ReportMetricChart'
@@ -35,16 +37,47 @@ function sourceLabel(report: RunReportDTO): string {
   return 'stats.jsonl · compatibility fallback'
 }
 
+function DirectionBreakdown({ type, read, write }: { type: 'iops' | 'bw' | 'lat'; read: number; write: number }) {
+  return (
+    <small className="mt-1 block font-mono text-[9px] leading-4 text-muted-foreground">
+      <span className="block whitespace-nowrap">R {formatMetricValue(type, read)}</span>
+      <span className="block whitespace-nowrap">W {formatMetricValue(type, write)}</span>
+    </small>
+  )
+}
+
 export function RunDetailPanel({ detail, report, loading, detailError, onAction, statusColor, formatBytes }: RunDetailPanelProps) {
-  const [xDomain, setXDomain] = useState<{ min: number; max: number } | null>(null)
+  const [domainState, setDomainState] = useState<{ runId: string; domain: { min: number; max: number } | null }>({ runId: '', domain: null })
+  const [jobSelection, setJobSelection] = useState<{ runId: string; keys: string[] }>({ runId: '', keys: [] })
+  const [directions, setDirections] = useState<MetricDirection[]>(['read', 'write'])
+  const [latencyStatistics, setLatencyStatistics] = useState<LatencyStatistic[]>(['mean', 'p99', 'max'])
   const summary = report?.summary
   const stages = report?.stages ?? []
   const series = report?.series ?? []
+  const jobSeries = useMemo(() => report?.job_series ?? [], [report?.job_series])
+  const metricJobs = useMemo(() => getReportMetricJobs(jobSeries), [jobSeries])
+  const runId = report?.meta.id ?? ''
+  const defaultJobKeys = useMemo(() => metricJobs.map((job) => job.key), [metricJobs])
+  const selectedJobKeys = jobSelection.runId === runId ? jobSelection.keys.filter((key) => defaultJobKeys.includes(key)) : defaultJobKeys
+  const xDomain = domainState.runId === runId ? domainState.domain : null
   const totalStageDuration = Math.max(1, stages.at(-1)?.end_seconds ?? summary?.duration_seconds ?? 1)
 
   const syncDomain = useCallback((domain: { min: number; max: number }) => {
-    setXDomain((current) => current && Math.abs(current.min - domain.min) < 0.001 && Math.abs(current.max - domain.max) < 0.001 ? current : domain)
-  }, [])
+    setDomainState((current) => current.runId === runId && current.domain && Math.abs(current.domain.min - domain.min) < 0.001 && Math.abs(current.domain.max - domain.max) < 0.001 ? current : { runId, domain })
+  }, [runId])
+
+  const toggleJob = (key: string) => setJobSelection(() => ({
+    runId,
+    keys: selectedJobKeys.includes(key)
+      ? selectedJobKeys.length > 1 ? selectedJobKeys.filter((item) => item !== key) : selectedJobKeys
+      : [...selectedJobKeys, key],
+  }))
+  const toggleDirection = (direction: MetricDirection) => setDirections((current) => current.includes(direction)
+    ? current.length > 1 ? current.filter((item) => item !== direction) : current
+    : [...current, direction])
+  const toggleLatencyStatistic = (statistic: LatencyStatistic) => setLatencyStatistics((current) => current.includes(statistic)
+    ? current.length > 1 ? current.filter((item) => item !== statistic) : current
+    : [...current, statistic])
 
   return (
     <section className="h-full min-h-0 bg-background">
@@ -98,31 +131,45 @@ export function RunDetailPanel({ detail, report, loading, detailError, onAction,
               <div className="p-4 sm:border-r sm:border-border">
                 <h3 className="text-xs font-semibold">IOPS</h3>
                 <dl className="mt-3 grid grid-cols-2 gap-3">
-                  <div><dt className="text-[10px] text-muted-foreground">MEAN</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('iops', summary?.mean_iops ?? 0)}</dd></div>
-                  <div><dt className="text-[10px] text-muted-foreground">MAX</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('iops', summary?.peak_iops ?? 0)}</dd></div>
+                  <div><dt className="text-[10px] text-muted-foreground">MEAN</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('iops', summary?.mean_iops ?? 0)}</dd><DirectionBreakdown type="iops" read={summary?.mean_iops_read ?? 0} write={summary?.mean_iops_write ?? 0} /></div>
+                  <div><dt className="text-[10px] text-muted-foreground">MAX</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('iops', summary?.peak_iops ?? 0)}</dd><DirectionBreakdown type="iops" read={summary?.peak_iops_read ?? 0} write={summary?.peak_iops_write ?? 0} /></div>
                 </dl>
               </div>
               <div className="border-t border-border p-4 sm:border-r sm:border-t-0">
                 <h3 className="text-xs font-semibold">带宽</h3>
                 <dl className="mt-3 grid grid-cols-2 gap-3">
-                  <div><dt className="text-[10px] text-muted-foreground">MEAN</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('bw', summary?.mean_bandwidth_mib ?? 0)}</dd></div>
-                  <div><dt className="text-[10px] text-muted-foreground">MAX</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('bw', summary?.peak_bandwidth_mib ?? 0)}</dd></div>
+                  <div><dt className="text-[10px] text-muted-foreground">MEAN</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('bw', summary?.mean_bandwidth_mib ?? 0)}</dd><DirectionBreakdown type="bw" read={summary?.mean_bandwidth_read_mib ?? 0} write={summary?.mean_bandwidth_write_mib ?? 0} /></div>
+                  <div><dt className="text-[10px] text-muted-foreground">MAX</dt><dd className="mt-1 font-mono text-lg font-semibold">{formatMetricValue('bw', summary?.peak_bandwidth_mib ?? 0)}</dd><DirectionBreakdown type="bw" read={summary?.peak_bandwidth_read_mib ?? 0} write={summary?.peak_bandwidth_write_mib ?? 0} /></div>
                 </dl>
               </div>
               <div className="border-t border-border p-4 sm:border-t-0">
                 <h3 className="text-xs font-semibold">完成延迟</h3>
                 <dl className="mt-3 grid grid-cols-3 gap-2">
-                  <div><dt className="text-[10px] text-muted-foreground">MEAN</dt><dd className="mt-1 font-mono text-sm font-semibold">{formatMetricValue('lat', summary?.mean_latency_ms ?? 0)}</dd></div>
-                  <div><dt className="text-[10px] text-muted-foreground">P99</dt><dd className="mt-1 font-mono text-sm font-semibold text-amber-700">{formatMetricValue('lat', summary?.p99_latency_ms ?? 0)}</dd></div>
-                  <div><dt className="text-[10px] text-muted-foreground">MAX</dt><dd className="mt-1 font-mono text-sm font-semibold text-red-700">{formatMetricValue('lat', summary?.peak_latency_ms ?? 0)}</dd></div>
+                  <div><dt className="text-[10px] text-muted-foreground">MEAN</dt><dd className="mt-1 font-mono text-sm font-semibold">{formatMetricValue('lat', summary?.mean_latency_ms ?? 0)}</dd><DirectionBreakdown type="lat" read={summary?.mean_latency_read_ms ?? 0} write={summary?.mean_latency_write_ms ?? 0} /></div>
+                  <div><dt className="text-[10px] text-muted-foreground">P99</dt><dd className="mt-1 font-mono text-sm font-semibold text-amber-700">{formatMetricValue('lat', summary?.p99_latency_ms ?? 0)}</dd><DirectionBreakdown type="lat" read={summary?.p99_latency_read_ms ?? 0} write={summary?.p99_latency_write_ms ?? 0} /></div>
+                  <div><dt className="text-[10px] text-muted-foreground">MAX</dt><dd className="mt-1 font-mono text-sm font-semibold text-red-700">{formatMetricValue('lat', summary?.peak_latency_ms ?? 0)}</dd><DirectionBreakdown type="lat" read={summary?.peak_latency_read_ms ?? 0} write={summary?.peak_latency_write_ms ?? 0} /></div>
                 </dl>
               </div>
             </section>
 
+            {jobSeries.length ? (
+              <section className="border-b border-border">
+                <header className="border-b border-border px-4 py-3"><h3 className="text-xs font-semibold">Job 性能明细</h3></header>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px] border-collapse text-left text-[10px]">
+                    <thead className="bg-muted/50 text-muted-foreground"><tr><th className="px-3 py-2 font-semibold">Job</th><th className="px-3 py-2 font-semibold">IOPS MEAN R / W</th><th className="px-3 py-2 font-semibold">IOPS MAX R / W</th><th className="px-3 py-2 font-semibold">BW MEAN R / W</th><th className="px-3 py-2 font-semibold">P99 LAT R / W</th></tr></thead>
+                    <tbody className="divide-y divide-border">
+                      {jobSeries.map((job) => <tr key={job.key}><td className="px-3 py-2"><strong className="block text-xs">{job.name}</strong><span className="text-muted-foreground">OP {job.stage_index + 1} · {job.stage_name}</span></td><td className="px-3 py-2 font-mono">{formatMetricValue('iops', job.summary.mean_iops_read)} / {formatMetricValue('iops', job.summary.mean_iops_write)}</td><td className="px-3 py-2 font-mono">{formatMetricValue('iops', job.summary.peak_iops_read)} / {formatMetricValue('iops', job.summary.peak_iops_write)}</td><td className="px-3 py-2 font-mono">{formatMetricValue('bw', job.summary.mean_bandwidth_read_mib)} / {formatMetricValue('bw', job.summary.mean_bandwidth_write_mib)}</td><td className="px-3 py-2 font-mono">{formatMetricValue('lat', job.summary.p99_latency_read_ms)} / {formatMetricValue('lat', job.summary.p99_latency_write_ms)}</td></tr>)}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
+
             <section className="border-b border-border p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div><h3 className="text-xs font-semibold">节点时间带</h3><p className="mt-0.5 text-[11px] text-muted-foreground">竖线标记每个节点在 fio task 日志时间轴上的起点。</p></div>
-                <Button size="sm" variant="ghost" onClick={() => setXDomain(null)}><RotateCcw />重置缩放</Button>
+                <Button size="sm" variant="ghost" onClick={() => setDomainState({ runId, domain: null })}><RotateCcw />重置缩放</Button>
               </div>
               <div className="overflow-x-auto border border-border bg-workbench">
                 <div className="flex min-w-[520px]">
@@ -142,6 +189,7 @@ export function RunDetailPanel({ detail, report, loading, detailError, onAction,
             </section>
 
             <div className="space-y-4 bg-workbench p-4">
+              <MetricSeriesControls jobs={metricJobs} selectedJobKeys={selectedJobKeys} directions={directions} latencyStatistics={latencyStatistics} showLatencyStatistics onToggleJob={toggleJob} onToggleDirection={toggleDirection} onToggleLatencyStatistic={toggleLatencyStatistic} />
               {([
                 ['iops', 'IOPS', `MEAN ${formatMetricValue('iops', summary?.mean_iops ?? 0)} · MAX ${formatMetricValue('iops', summary?.peak_iops ?? 0)}`],
                 ['bw', '带宽', `MEAN ${formatMetricValue('bw', summary?.mean_bandwidth_mib ?? 0)} · MAX ${formatMetricValue('bw', summary?.peak_bandwidth_mib ?? 0)}`],
@@ -153,7 +201,7 @@ export function RunDetailPanel({ detail, report, loading, detailError, onAction,
                     <span className="font-mono text-[10px] text-muted-foreground">{stats}</span>
                   </header>
                   <div className="p-2">
-                    <ReportMetricChart data={series} stages={stages} type={type} height={250} xDomain={xDomain} onDomainChange={syncDomain} />
+                    <ReportMetricChart data={series} stages={stages} type={type} height={250} xDomain={xDomain} onDomainChange={syncDomain} jobSeries={jobSeries} jobs={metricJobs} selectedJobKeys={selectedJobKeys} directions={directions} latencyStatistics={latencyStatistics} />
                   </div>
                 </section>
               ))}

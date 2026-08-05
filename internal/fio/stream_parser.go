@@ -31,10 +31,10 @@ type StatusUpdate struct {
 
 // fioStatusUpdateRaw parses fio JSON which may have "time", "timestamp", or "timestamp_ms"
 type fioStatusUpdateRaw struct {
-	Time        int64       `json:"time"`
-	Timestamp   int64       `json:"timestamp"`
-	TimestampMs int64       `json:"timestamp_ms"`
-	Jobs        []JobStatus `json:"jobs"`
+	Time        json.RawMessage `json:"time"`
+	Timestamp   int64           `json:"timestamp"`
+	TimestampMs int64           `json:"timestamp_ms"`
+	Jobs        []JobStatus     `json:"jobs"`
 }
 
 // JobStatus represents a single job's status in the status update
@@ -162,7 +162,8 @@ func (p *StreamJSONParser) parse() {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024) // 1MB buffer for large status updates
 
 	lineCount := 0
-	var jsonBuffer string // Buffer for multi-line JSON
+	var jsonBuffer string
+	jsonDepth := 0
 
 	for {
 		select {
@@ -197,74 +198,37 @@ func (p *StreamJSONParser) parse() {
 			log.Printf("[DEBUG] StreamJSONParser: Line %d (%d bytes): %.100s", lineCount, len(line), trimmedLine)
 		}
 
-		// Try to parse current line as complete JSON first
-		var raw fioStatusUpdateRaw
-		if err := json.Unmarshal([]byte(trimmedLine), &raw); err == nil && len(raw.Jobs) > 0 {
-			status := rawToStatusUpdate(&raw)
-			if status != nil {
-				p.handleStatusUpdate(lineCount, trimmedLine, status)
-				continue
-			}
-		}
-		// Time/Jobs empty: try fio single-job format (job_start, read, write at top level)
-		var single fioSingleJobLine
-		if err := json.Unmarshal([]byte(trimmedLine), &single); err == nil && single.JobStart > 0 {
-			if converted := singleJobToStatusUpdate(&single); converted != nil {
-				p.handleStatusUpdate(lineCount, trimmedLine, converted)
-				continue
-			}
+		if status := decodeFioStatusJSON(trimmedLine); status != nil {
+			p.handleStatusUpdate(lineCount, trimmedLine, status)
+			continue
 		}
 
-		// Not valid JSON on its own, might be part of multi-line JSON or regular output
-		// New object starts: either we have no buffer, or this line starts with '{'
-		if strings.HasPrefix(trimmedLine, "{") {
-			jsonBuffer = trimmedLine
-			if Debug {
-				log.Printf("[DEBUG] StreamJSONParser: Line %d - Starting JSON buffer", lineCount)
+		if jsonBuffer != "" {
+			jsonBuffer += "\n" + trimmedLine
+			jsonDepth += jsonBraceDelta(trimmedLine)
+			if jsonDepth <= 0 {
+				if status := decodeFioStatusJSON(jsonBuffer); status != nil {
+					p.handleStatusUpdate(lineCount, jsonBuffer, status)
+				} else {
+					p.sendOutput(lineCount, jsonBuffer)
+				}
+				jsonBuffer = ""
+				jsonDepth = 0
 			}
 			continue
 		}
 
-		// If we have buffered JSON, append this line and try to parse when we see '}'
-		if jsonBuffer != "" {
-			// New object starting: previous buffer was incomplete, start fresh
-			if strings.HasPrefix(trimmedLine, "{") {
-				jsonBuffer = trimmedLine
-				if Debug {
-					log.Printf("[DEBUG] StreamJSONParser: Line %d - New JSON object, reset buffer", lineCount)
+		if strings.HasPrefix(trimmedLine, "{") {
+			jsonBuffer = trimmedLine
+			jsonDepth = jsonBraceDelta(trimmedLine)
+			if jsonDepth <= 0 {
+				if status := decodeFioStatusJSON(jsonBuffer); status != nil {
+					p.handleStatusUpdate(lineCount, jsonBuffer, status)
+				} else {
+					p.sendOutput(lineCount, jsonBuffer)
 				}
-				continue
-			}
-			jsonBuffer += " " + trimmedLine
-			if Debug {
-				log.Printf("[DEBUG] StreamJSONParser: Line %d - Appending to JSON buffer (total: %d chars)", lineCount, len(jsonBuffer))
-			}
-
-			// Only try parse when line ends with '}' (possible end of top-level object)
-			if strings.HasSuffix(trimmedLine, "}") {
-				var raw fioStatusUpdateRaw
-				if err := json.Unmarshal([]byte(jsonBuffer), &raw); err == nil && len(raw.Jobs) > 0 {
-					if Debug {
-						log.Printf("[DEBUG] StreamJSONParser: Line %d - Completed multi-line JSON", lineCount)
-					}
-					if status := rawToStatusUpdate(&raw); status != nil {
-						p.handleStatusUpdate(lineCount, jsonBuffer, status)
-					}
-					jsonBuffer = ""
-					continue
-				}
-				var single fioSingleJobLine
-				if err := json.Unmarshal([]byte(jsonBuffer), &single); err == nil && single.JobStart > 0 {
-					if converted := singleJobToStatusUpdate(&single); converted != nil {
-						p.handleStatusUpdate(lineCount, jsonBuffer, converted)
-						jsonBuffer = ""
-						continue
-					}
-				}
-				// Parse failed: might be inner '}' only (e.g. "clat_ns": { ... }). Keep appending.
-				if Debug {
-					log.Printf("[DEBUG] StreamJSONParser: Line %d - JSON buffer not complete yet (parse failed), continuing", lineCount)
-				}
+				jsonBuffer = ""
+				jsonDepth = 0
 			}
 			continue
 		}
@@ -282,6 +246,46 @@ func (p *StreamJSONParser) parse() {
 		}
 		p.sendOutput(lineCount, line)
 	}
+}
+
+func decodeFioStatusJSON(payload string) *StatusUpdate {
+	var raw fioStatusUpdateRaw
+	if err := json.Unmarshal([]byte(payload), &raw); err == nil && len(raw.Jobs) > 0 {
+		return rawToStatusUpdate(&raw)
+	}
+	var single fioSingleJobLine
+	if err := json.Unmarshal([]byte(payload), &single); err == nil && single.JobStart > 0 {
+		return singleJobToStatusUpdate(&single)
+	}
+	return nil
+}
+
+func jsonBraceDelta(value string) int {
+	depth := 0
+	inString := false
+	escaped := false
+	for _, char := range value {
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+			} else if char == '"' {
+				inString = false
+			}
+			continue
+		}
+		if char == '"' {
+			inString = true
+		} else if char == '{' {
+			depth++
+		} else if char == '}' {
+			depth--
+		}
+	}
+	return depth
 }
 
 // parseStatusLine converts a matched status line to a StatusUpdate
@@ -479,8 +483,12 @@ func rawToStatusUpdate(raw *fioStatusUpdateRaw) *StatusUpdate {
 		return nil
 	}
 	var t int64
-	if raw.Time > 0 {
-		t = normalizeTimeToSeconds(raw.Time)
+	var rawTime int64
+	if len(raw.Time) > 0 {
+		_ = json.Unmarshal(raw.Time, &rawTime)
+	}
+	if rawTime > 0 {
+		t = normalizeTimeToSeconds(rawTime)
 	} else if raw.Timestamp > 0 {
 		t = raw.Timestamp // already Unix seconds
 	} else if raw.TimestampMs > 0 {
