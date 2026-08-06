@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { Experiment, ExperimentJob } from '@/types/experiment'
+import type { Experiment, ExperimentJob, ExperimentStage } from '@/types/experiment'
 import { compileExperimentToTaskList, defaultExperiment, defaultJob, defaultStage } from '@/lib/experimentCompiler'
 
 const uid = (p: string) => `${p}-${typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : Date.now()}`
@@ -16,6 +16,14 @@ function readDraft(): Experiment {
   }
 }
 
+export function insertStageAfter(stages: ExperimentStage[], stage: ExperimentStage, afterStageId: string | null = null): ExperimentStage[] {
+  const targetIndex = afterStageId ? stages.findIndex((item) => item.id === afterStageId) : -1
+  if (targetIndex < 0) return [...stages, stage]
+  const next = [...stages]
+  next.splice(targetIndex + 1, 0, stage)
+  return next
+}
+
 export function useBuilderStore() {
   const [experiment, setExperiment] = useState<Experiment>(readDraft)
   const [selectedStageId, setSelectedStageId] = useState<string | null>(() => experiment.stages[0]?.id ?? null)
@@ -28,9 +36,9 @@ export function useBuilderStore() {
   const selectedStage = useMemo(() => experiment.stages.find((s) => s.id === selectedStageId) ?? null, [experiment.stages, selectedStageId])
   const selectedJob = useMemo(() => selectedStage?.jobs.find((j) => j.id === selectedJobId) ?? null, [selectedStage, selectedJobId])
 
-  const addStage = () => {
+  const addStage = (afterStageId: string | null = null) => {
     const stage = { ...defaultStage(), id: uid('stage'), name: `节点 ${experiment.stages.length + 1}` }
-    setExperiment((prev) => ({ ...prev, stages: [...prev.stages, stage] }))
+    setExperiment((prev) => ({ ...prev, stages: insertStageAfter(prev.stages, stage, afterStageId) }))
     setSelectedStageId(stage.id)
     setSelectedJobId(null)
   }

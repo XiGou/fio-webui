@@ -248,7 +248,8 @@ export function WorkflowStudioPage() {
       <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)_360px]">
         <ModulePalette
           canAddJob={Boolean(selectedStage)}
-          onAddStage={addStage}
+          insertAfterLabel={selectedStage ? `OP ${String(experiment.stages.findIndex((stage) => stage.id === selectedStage.id) + 1).padStart(2, '0')}` : undefined}
+          onAddStage={() => addStage(selectedStageId)}
           onAddJob={(preset) => selectedStage && addJob(selectedStage.id, preset)}
         />
         <PipelineCanvas

@@ -160,6 +160,11 @@
 .pipeline-connector { position: relative; height: 2px; width: 42px; background: hsl(var(--border)); }
 .pipeline-connector::after { position: absolute; right: -1px; top: -3px; height: 8px; width: 8px; content: ''; border-radius: 9999px; border: 2px solid hsl(var(--muted-foreground)); background: hsl(var(--workbench)); }
 .pipeline-connector span { position: absolute; left: 0; top: -3px; height: 8px; width: 8px; border-radius: 9999px; border: 2px solid hsl(var(--muted-foreground)); background: hsl(var(--workbench)); }
+.pipeline-connector.has-insert-control { z-index: 2; }
+.pipeline-insert { position: absolute; left: 50%; top: 50%; display: flex; height: 26px; width: 26px; transform: translate(-50%, -50%); align-items: center; justify-content: center; border: 1px solid hsl(var(--primary) / .6); background: white; color: hsl(var(--primary)); box-shadow: 0 2px 7px rgb(15 23 42 / .1); }
+.pipeline-insert:hover { border-color: hsl(var(--primary)); background: hsl(var(--accent)); }
+.pipeline-insert:active { transform: translate(-50%, -50%) scale(.96); }
+.pipeline-insert svg { height: 14px; width: 14px; }
 
 .pipeline-stage { border: 1px solid hsl(var(--border)); background: white; box-shadow: 0 4px 14px rgb(15 23 42 / .07); transition: border-color 120ms ease, box-shadow 120ms ease; }
 .pipeline-stage.is-selected { border-color: hsl(var(--primary)); box-shadow: 0 0 0 2px hsl(var(--primary) / .12), 0 5px 16px rgb(15 23 42 / .09); }

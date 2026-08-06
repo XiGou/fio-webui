@@ -11,7 +11,7 @@ type PipelineCanvasProps = {
   selectedJobId: string | null
   onSelectStage: (stageId: string) => void
   onSelectJob: (stageId: string, jobId: string) => void
-  onAddStage: () => void
+  onAddStage: (afterStageId?: string | null) => void
   onAddJob: (stageId: string) => void
   onDeleteStage: (stageId: string) => void
   onDeleteJob: (stageId: string, jobId: string) => void
@@ -102,50 +102,67 @@ export function PipelineCanvas({ stages, selectedStageId, selectedJobId, onSelec
           <small>COMPILE</small>
         </div>
 
-        {stages.map((stage, index) => (
-          <div className="flex items-start" key={stage.id}>
-            <div className="pipeline-connector mt-[7.25rem]" aria-hidden="true"><span /></div>
-            <article data-pipeline-node className={cn('pipeline-stage w-[282px] shrink-0', selectedStageId === stage.id && 'is-selected')}>
-              <header>
-                <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onSelectStage(stage.id)}>
-                  <span className="text-[10px] font-semibold text-muted-foreground">OP {String(index + 1).padStart(2, '0')}</span>
-                  <strong className="mt-0.5 block truncate text-sm">{stage.name}</strong>
-                </button>
-                <Badge tone="info">
-                  <Layers3 className="mr-1 h-3 w-3" />
-                  {stage.jobs.length > 1 ? `${stage.jobs.length} JOBS · 并行` : `${stage.jobs.length} JOB`}
-                </Badge>
-              </header>
-
-              <div className="divide-y divide-border border-y border-border">
-                {stage.jobs.map((job) => (
-                  <JobModule
-                    key={job.id}
-                    stageId={stage.id}
-                    job={job}
-                    selected={selectedJobId === job.id}
-                    onSelect={() => onSelectJob(stage.id, job.id)}
-                    onDelete={() => onDeleteJob(stage.id, job.id)}
-                  />
-                ))}
-                {stage.jobs.length === 0 ? <p className="px-3 py-5 text-center text-xs text-destructive">节点中没有 Job</p> : null}
+        {stages.map((stage, index) => {
+          const previousStage = stages[index - 1]
+          const insertAfterStage = previousStage?.id === selectedStageId ? previousStage : null
+          return (
+            <div className="flex items-start" key={stage.id}>
+              <div className={cn('pipeline-connector mt-[7.25rem]', insertAfterStage && 'has-insert-control')} aria-hidden={!insertAfterStage}>
+                <span />
+                {insertAfterStage ? (
+                  <button
+                    className="pipeline-insert"
+                    type="button"
+                    onClick={() => onAddStage(insertAfterStage.id)}
+                    title={`在 ${insertAfterStage.name} 后插入节点`}
+                    aria-label={`在 ${insertAfterStage.name} 后插入节点`}
+                  >
+                    <Plus />
+                  </button>
+                ) : null}
               </div>
+              <article data-pipeline-node className={cn('pipeline-stage w-[282px] shrink-0', selectedStageId === stage.id && 'is-selected')}>
+                <header>
+                  <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onSelectStage(stage.id)}>
+                    <span className="text-[10px] font-semibold text-muted-foreground">OP {String(index + 1).padStart(2, '0')}</span>
+                    <strong className="mt-0.5 block truncate text-sm">{stage.name}</strong>
+                  </button>
+                  <Badge tone="info">
+                    <Layers3 className="mr-1 h-3 w-3" />
+                    {stage.jobs.length > 1 ? `${stage.jobs.length} JOBS · 并行` : `${stage.jobs.length} JOB`}
+                  </Badge>
+                </header>
 
-              <footer>
-                <Button size="sm" variant="ghost" onClick={() => onAddJob(stage.id)}><Plus />Job</Button>
-                <span className="ml-auto flex">
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onMoveStage(stage.id, -1)} disabled={index === 0} title="前移节点"><ArrowLeft /></Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onMoveStage(stage.id, 1)} disabled={index === stages.length - 1} title="后移节点"><ArrowRight /></Button>
-                  <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-destructive" onClick={() => onDeleteStage(stage.id)} title="删除节点"><Trash2 /></Button>
-                </span>
-              </footer>
-            </article>
-          </div>
-        ))}
+                <div className="divide-y divide-border border-y border-border">
+                  {stage.jobs.map((job) => (
+                    <JobModule
+                      key={job.id}
+                      stageId={stage.id}
+                      job={job}
+                      selected={selectedJobId === job.id}
+                      onSelect={() => onSelectJob(stage.id, job.id)}
+                      onDelete={() => onDeleteJob(stage.id, job.id)}
+                    />
+                  ))}
+                  {stage.jobs.length === 0 ? <p className="px-3 py-5 text-center text-xs text-destructive">节点中没有 Job</p> : null}
+                </div>
+
+                <footer>
+                  <Button size="sm" variant="ghost" onClick={() => onAddJob(stage.id)}><Plus />Job</Button>
+                  <span className="ml-auto flex">
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onMoveStage(stage.id, -1)} disabled={index === 0} title="前移节点"><ArrowLeft /></Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => onMoveStage(stage.id, 1)} disabled={index === stages.length - 1} title="后移节点"><ArrowRight /></Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 hover:text-destructive" onClick={() => onDeleteStage(stage.id)} title="删除节点"><Trash2 /></Button>
+                  </span>
+                </footer>
+              </article>
+            </div>
+          )
+        })}
 
         <div className="flex items-start">
           <div className="pipeline-connector mt-[7.25rem]" aria-hidden="true"><span /></div>
-          <button className="pipeline-add mt-[5.7rem]" type="button" onClick={onAddStage} title="追加节点" aria-label="追加节点"><Plus /></button>
+          <button className="pipeline-add mt-[5.7rem]" type="button" onClick={() => onAddStage(null)} title="追加到流水线末尾" aria-label="追加节点到流水线末尾"><Plus /></button>
           <div className="pipeline-connector mt-[7.25rem]" aria-hidden="true"><span /></div>
           <div className="pipeline-terminal mt-24">
             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-white"><BarChart3 className="h-4 w-4" /></span>

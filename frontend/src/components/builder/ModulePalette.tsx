@@ -3,6 +3,7 @@ import type { ExperimentJob } from '@/types/experiment'
 
 type ModulePaletteProps = {
   canAddJob: boolean
+  insertAfterLabel?: string
   onAddStage: () => void
   onAddJob: (preset: Partial<ExperimentJob>) => void
 }
@@ -20,7 +21,7 @@ const workloads: Array<{
   { label: '4K 随机写', detail: 'randwrite · qd32', icon: ShieldAlert, preset: { name: 'randwrite-4k', overrides: { rw: 'randwrite', bs: '4k', iodepth: 32 } }, risky: true },
 ]
 
-export function ModulePalette({ canAddJob, onAddStage, onAddJob }: ModulePaletteProps) {
+export function ModulePalette({ canAddJob, insertAfterLabel, onAddStage, onAddJob }: ModulePaletteProps) {
   return (
     <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar">
       <div className="border-b border-border px-4 py-3">
@@ -31,9 +32,9 @@ export function ModulePalette({ canAddJob, onAddStage, onAddJob }: ModulePalette
         <section>
           <p className="mb-2 px-1 text-[10px] font-semibold uppercase text-muted-foreground">执行结构</p>
           <div className="space-y-2">
-            <button className="module-palette-item" type="button" onClick={onAddStage}>
+            <button className="module-palette-item" type="button" onClick={onAddStage} title={insertAfterLabel ? `在 ${insertAfterLabel} 后插入节点` : '追加节点到流水线末尾'}>
               <span className="module-icon"><Layers3 /></span>
-              <span><strong>执行节点</strong><small>节点内 Job 并行</small></span>
+              <span><strong>执行节点</strong><small>{insertAfterLabel ? `插入 ${insertAfterLabel} 后` : '追加到流水线末尾'}</small></span>
               <Plus />
             </button>
           </div>
